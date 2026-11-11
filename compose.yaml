@@ -1,0 +1,114 @@
+name: projectbridge
+
+x-backend-environment: &backend-environment
+  APP_ENV: ${APP_ENV:-development}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://projectbridge:projectbridge-dev-only@db:5432/projectbridge}
+  APP_CORS_ORIGINS: '${APP_CORS_ORIGINS:-["http://localhost:3000"]}'
+  APP_MCP_ALLOWED_HOSTS: '${APP_MCP_ALLOWED_HOSTS:-["localhost","localhost:*","127.0.0.1","127.0.0.1:*"]}'
+  APP_MCP_ALLOWED_ORIGINS: '${APP_MCP_ALLOWED_ORIGINS:-["http://localhost:3000"]}'
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-projectbridge}
+      POSTGRES_USER: ${POSTGRES_USER:-projectbridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-projectbridge-dev-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ./backend
+      target: development
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    environment: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+
+  backend:
+    build:
+      context: ./backend
+      target: development
+    command:
+      - uv
+      - run
+      - fastapi
+      - dev
+      - app/main.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment: *backend-environment
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/workspace
+      - backend-venv:/workspace/.venv
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/live')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      INTERNAL_API_URL: http://backend:8000
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend:/workspace
+      - frontend-node-modules:/workspace/node_modules
+      - frontend-next:/workspace/.next
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  backend-venv:
+  frontend-node-modules:
+  frontend-next:
+
