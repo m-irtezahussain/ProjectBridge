@@ -1,6 +1,10 @@
-"""Import ORM models here so Alembic can discover their metadata."""
+"""ORM model registry used by the application and Alembic."""
 
+from app.models.auth_rate_limit import AuthRateLimit
 from app.models.base import Base
+from app.models.business import Business
+from app.models.refresh_token import RefreshToken
+from app.models.user import User
 
-__all__ = ["Base"]
+__all__ = ["AuthRateLimit", "Base", "Business", "RefreshToken", "User"]
 

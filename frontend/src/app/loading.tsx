@@ -1,4 +1,4 @@
 export default function Loading() {
-  return <main aria-busy="true">Loading ProjectBridge…</main>;
+  return <main className="state-page" aria-busy="true">Loading ProjectBridge…</main>;
 }
 
