@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import BusinessCreate, UserCreate
+from app.models import ProjectStatus
+from app.schemas import BusinessCreate, ProjectCreate, ProjectUpdate, UserCreate
 
 
 def test_user_create_normalizes_valid_input() -> None:
@@ -68,4 +69,35 @@ def test_business_create_normalizes_name_and_rejects_owner_override() -> None:
 def test_business_create_rejects_invalid_name(name: str) -> None:
     with pytest.raises(ValidationError):
         BusinessCreate(name=name)
+
+
+def test_project_create_normalizes_and_defaults_status() -> None:
+    project = ProjectCreate(name="  Client   Portal ")
+
+    assert project.name == "Client Portal"
+    assert project.status is ProjectStatus.PLANNING
+
+
+@pytest.mark.parametrize("status", ["Paused", "active", "At Risk", ""])
+def test_project_create_rejects_invalid_status(status: str) -> None:
+    with pytest.raises(ValidationError):
+        ProjectCreate(name="Client Portal", status=status)
+
+
+def test_project_create_rejects_business_id_override() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ProjectCreate.model_validate(
+            {"name": "Client Portal", "status": "Active", "business_id": 999}
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"name": None}, {"status": None}, {"name": "A"}, {"status": "Paused"}],
+)
+def test_project_update_rejects_empty_or_invalid_payloads(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        ProjectUpdate.model_validate(payload)
 

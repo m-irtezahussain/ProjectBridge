@@ -7,7 +7,7 @@ const internalApiUrl =
   process.env.NEXT_PUBLIC_API_URL ??
   "http://localhost:8000";
 
-const allowedDestinations = new Set(["/dashboard", "/business/register"]);
+const allowedDestinations = new Set(["/dashboard", "/business/register", "/projects"]);
 
 export async function GET(request: NextRequest) {
   const requestedNext = request.nextUrl.searchParams.get("next") ?? "/dashboard";

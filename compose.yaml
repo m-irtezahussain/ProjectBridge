@@ -9,7 +9,7 @@ x-backend-environment: &backend-environment
   APP_REFRESH_SLIDING_DAYS: ${APP_REFRESH_SLIDING_DAYS:-7}
   APP_REFRESH_ABSOLUTE_DAYS: ${APP_REFRESH_ABSOLUTE_DAYS:-30}
   DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://projectbridge:projectbridge-dev-only@db:5432/projectbridge}
-  APP_CORS_ORIGINS: '${APP_CORS_ORIGINS:-["http://localhost:3000"]}'
+  APP_CORS_ORIGINS: '${APP_CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://0.0.0.0:3000"]}'
   APP_MCP_ALLOWED_HOSTS: '${APP_MCP_ALLOWED_HOSTS:-["localhost","localhost:*","127.0.0.1","127.0.0.1:*"]}'
   APP_MCP_ALLOWED_ORIGINS: '${APP_MCP_ALLOWED_ORIGINS:-["http://localhost:3000"]}'
 

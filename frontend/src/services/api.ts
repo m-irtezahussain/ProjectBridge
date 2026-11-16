@@ -1,11 +1,10 @@
 import type { DisplayStatus, ServiceStatus } from "@/types/status";
-
-const publicApiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { publicApiBaseUrl } from "./api-base";
 
 function apiBaseUrl(): string {
   return typeof window === "undefined"
-    ? process.env.INTERNAL_API_URL ?? publicApiUrl
-    : publicApiUrl;
+    ? process.env.INTERNAL_API_URL ?? publicApiBaseUrl()
+    : publicApiBaseUrl();
 }
 
 export async function getServiceStatus(): Promise<DisplayStatus> {

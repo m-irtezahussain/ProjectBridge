@@ -10,6 +10,7 @@ from app.core.validation import normalize_name
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.project import Project
     from app.models.user import User
 
 
@@ -31,6 +32,10 @@ class Business(Base):
     )
 
     owner: Mapped[User] = relationship(back_populates="owned_businesses", lazy="joined")
+    projects: Mapped[list[Project]] = relationship(
+        back_populates="business",
+        lazy="raise",
+    )
 
     @validates("name")
     def validate_name(self, _key: str, value: str) -> str:

@@ -1,6 +1,5 @@
 import type { NavigationResponse } from "@/types/auth";
-
-const publicApiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { publicApiBaseUrl } from "./api-base";
 
 type ApiErrorBody = Readonly<{ detail?: string | Array<{ msg?: string }> }>;
 
@@ -9,17 +8,31 @@ async function request(
   payload?: Record<string, string>,
   allowRefresh = true,
 ): Promise<NavigationResponse> {
-  const response = await fetch(`${publicApiUrl}${path}`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
-  });
-  if (response.status === 401 && allowRefresh) {
-    const refreshResponse = await fetch(`${publicApiUrl}/api/v1/auth/refresh`, {
+  let response: Response;
+  try {
+    response = await fetch(`${publicApiBaseUrl()}${path}`, {
       method: "POST",
       credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
     });
+  } catch {
+    throw new Error(
+      "The API could not be reached. Check that the backend is running and reload the page.",
+    );
+  }
+  if (response.status === 401 && allowRefresh) {
+    let refreshResponse: Response;
+    try {
+      refreshResponse = await fetch(`${publicApiBaseUrl()}/api/v1/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      throw new Error(
+        "The API could not be reached. Check that the backend is running and reload the page.",
+      );
+    }
     if (refreshResponse.ok) {
       return request(path, payload, false);
     }

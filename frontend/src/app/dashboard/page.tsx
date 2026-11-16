@@ -29,10 +29,6 @@ export default async function DashboardPage() {
 
   return <DashboardFrame userName={session.full_name ?? "ProjectBridge user"} userEmail={session.email ?? ""}>
     <main className="dashboard-content" id="main-content">
-      <section className="dashboard-intro dashboard-enter" style={{ "--i": 0 } as CSSProperties}>
-        <div><span className="eyebrow">Monday, November 16</span><h1>Good morning, {firstName}.</h1><p>Here&apos;s what is moving across your workspace today.</p></div>
-        <div className="dashboard-intro__status"><i /><span><strong>Workspace healthy</strong><small>Last synced just now</small></span></div>
-      </section>
       <section className="dashboard-metrics" aria-label="Workspace metrics">
         {dashboardMetrics.map((metric, index) => <MetricCard metric={metric} index={index + 1} key={metric.label} />)}
       </section>

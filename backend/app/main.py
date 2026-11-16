@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["Mcp-Session-Id"],
+        max_age=7200,
     )
     app.include_router(api_router)
     app.mount("/mcp", mcp_http_app)

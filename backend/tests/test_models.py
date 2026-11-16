@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import inspect
 
-from app.models import Business, User
+from app.models import Business, Project, ProjectStatus, User
 
 
 def test_user_table_contains_only_secure_auth_columns() -> None:
@@ -68,5 +68,32 @@ def test_business_model_validates_name_and_owner() -> None:
 
     with pytest.raises(ValueError, match="positive user ID"):
         Business(name="Acme Studio", owned_by=0)
+
+
+def test_project_table_contains_tenant_status_and_soft_dismissal_columns() -> None:
+    columns = {column.name for column in inspect(Project).columns}
+    foreign_keys = list(Project.__table__.c.business_id.foreign_keys)
+
+    assert columns == {"id", "name", "business_id", "status", "deleted_at"}
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].target_fullname == "business.id"
+
+
+def test_project_model_normalizes_and_validates_fields() -> None:
+    project = Project(
+        name="  Client   Portal  ",
+        business_id=3,
+        status=ProjectStatus.ACTIVE,
+    )
+
+    assert project.name == "Client Portal"
+    assert project.status is ProjectStatus.ACTIVE
+
+    with pytest.raises(ValueError, match="Project name must be between"):
+        Project(name=" ", business_id=3, status=ProjectStatus.PLANNING)
+    with pytest.raises(ValueError, match="positive business ID"):
+        Project(name="Client Portal", business_id=0, status=ProjectStatus.PLANNING)
+    with pytest.raises(ValueError, match="Invalid project status"):
+        Project(name="Client Portal", business_id=3, status="Paused")
 
 

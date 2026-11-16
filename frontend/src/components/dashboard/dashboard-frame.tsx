@@ -71,7 +71,7 @@ export function DashboardFrame({ children, userName, userEmail }: DashboardFrame
           <label className="dashboard-search"><Icon name="search" /><input type="search" placeholder="Search projects, tasks, documents…" aria-label="Search workspace" /><kbd>⌘ K</kbd></label>
           <div className="dashboard-topbar__actions">
             <button className="dashboard-notification" type="button" aria-label="Notifications" title="No new notifications"><Icon name="document" /><i /></button>
-            <button className="dashboard-create" type="button" title="Project creation will be connected next"><span>+</span> New project</button>
+            <Link className="dashboard-create" href="/projects"><span>+</span> New project</Link>
           </div>
         </header>
         {children}
