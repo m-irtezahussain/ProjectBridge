@@ -8,11 +8,12 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.core.validation import normalize_name
+from app.core.validation import normalize_name, normalize_project_description
 from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.business import Business
+    from app.models.task import Task
 
 
 class ProjectStatus(StrEnum):
@@ -36,6 +37,7 @@ class Project(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     business_id: Mapped[int] = mapped_column(
         ForeignKey("business.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -55,10 +57,15 @@ class Project(Base):
     )
 
     business: Mapped[Business] = relationship(back_populates="projects", lazy="raise")
+    tasks: Mapped[list[Task]] = relationship(back_populates="project", lazy="raise")
 
     @validates("name")
     def validate_name(self, _key: str, value: str) -> str:
         return normalize_name(value, field_name="Project name")
+
+    @validates("description")
+    def validate_description(self, _key: str, value: str | None) -> str | None:
+        return normalize_project_description(value)
 
     @validates("business_id")
     def validate_business_id(self, _key: str, value: int) -> int:

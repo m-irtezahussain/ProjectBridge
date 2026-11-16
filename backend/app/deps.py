@@ -5,7 +5,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.core.managers import AuthManager, ProjectManager
+from app.core.managers import AuthManager, ProjectManager, TaskManager
 from app.core.services.rate_limits import AuthRateLimiter
 from app.core.services.refresh_tokens import RefreshTokenService
 from app.core.services.tokens import TokenService
@@ -29,6 +29,14 @@ def get_project_manager() -> ProjectManager:
 
 
 ProjectManagerDep = Annotated[ProjectManager, Depends(get_project_manager)]
+
+
+@lru_cache
+def get_task_manager() -> TaskManager:
+    return TaskManager(get_auth_manager())
+
+
+TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
 
 
 @lru_cache

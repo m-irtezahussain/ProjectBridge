@@ -1,7 +1,16 @@
 import pytest
 from sqlalchemy import inspect
 
-from app.models import Business, Project, ProjectStatus, User
+from app.models import (
+    Business,
+    Project,
+    ProjectStatus,
+    Task,
+    TaskPriority,
+    TaskSource,
+    TaskStatus,
+    User,
+)
 
 
 def test_user_table_contains_only_secure_auth_columns() -> None:
@@ -74,7 +83,14 @@ def test_project_table_contains_tenant_status_and_soft_dismissal_columns() -> No
     columns = {column.name for column in inspect(Project).columns}
     foreign_keys = list(Project.__table__.c.business_id.foreign_keys)
 
-    assert columns == {"id", "name", "business_id", "status", "deleted_at"}
+    assert columns == {
+        "id",
+        "name",
+        "description",
+        "business_id",
+        "status",
+        "deleted_at",
+    }
     assert len(foreign_keys) == 1
     assert foreign_keys[0].target_fullname == "business.id"
 
@@ -82,11 +98,13 @@ def test_project_table_contains_tenant_status_and_soft_dismissal_columns() -> No
 def test_project_model_normalizes_and_validates_fields() -> None:
     project = Project(
         name="  Client   Portal  ",
+        description="  Coordinate   the client launch.  ",
         business_id=3,
         status=ProjectStatus.ACTIVE,
     )
 
     assert project.name == "Client Portal"
+    assert project.description == "Coordinate the client launch."
     assert project.status is ProjectStatus.ACTIVE
 
     with pytest.raises(ValueError, match="Project name must be between"):
@@ -95,5 +113,58 @@ def test_project_model_normalizes_and_validates_fields() -> None:
         Project(name="Client Portal", business_id=0, status=ProjectStatus.PLANNING)
     with pytest.raises(ValueError, match="Invalid project status"):
         Project(name="Client Portal", business_id=3, status="Paused")
+
+    assert Project(
+        name="Client Portal",
+        description="   ",
+        business_id=3,
+        status=ProjectStatus.PLANNING,
+    ).description is None
+
+
+def test_task_table_contains_project_state_and_source_columns() -> None:
+    columns = {column.name for column in inspect(Task).columns}
+    foreign_keys = list(Task.__table__.c.project_id.foreign_keys)
+
+    assert columns == {
+        "id",
+        "title",
+        "description",
+        "status",
+        "priority",
+        "project_id",
+        "is_deleted",
+        "created_by",
+    }
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].target_fullname == "projects.id"
+
+
+def test_task_model_normalizes_and_validates_fields() -> None:
+    task = Task(
+        title="  Prepare   release notes ",
+        description="  Capture   the final changes. ",
+        status=TaskStatus.IN_REVIEW,
+        priority=TaskPriority.HIGH,
+        project_id=4,
+        created_by=TaskSource.MCP,
+    )
+
+    assert task.title == "Prepare release notes"
+    assert task.description == "Capture the final changes."
+    assert task.status is TaskStatus.IN_REVIEW
+    assert task.priority is TaskPriority.HIGH
+    assert task.created_by is TaskSource.MCP
+
+    with pytest.raises(ValueError, match="Task title must be between"):
+        Task(title=" ", project_id=4)
+    with pytest.raises(ValueError, match="positive project ID"):
+        Task(title="Valid task", project_id=0)
+    with pytest.raises(ValueError, match="Invalid task status"):
+        Task(title="Valid task", project_id=4, status="blocked")
+    with pytest.raises(ValueError, match="Invalid task priority"):
+        Task(title="Valid task", project_id=4, priority="critical")
+    with pytest.raises(ValueError, match="Invalid task source"):
+        Task(title="Valid task", project_id=4, created_by="web")
 
 

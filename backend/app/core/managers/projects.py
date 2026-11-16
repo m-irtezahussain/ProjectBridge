@@ -65,6 +65,7 @@ class ProjectManager:
         business = await self._get_business(session, access_token)
         project = Project(
             name=data.name,
+            description=data.description,
             business_id=business.id,
             status=data.status,
         )
@@ -84,6 +85,8 @@ class ProjectManager:
             project.name = data.name
         if data.status is not None:
             project.status = data.status
+        if "description" in data.model_fields_set:
+            project.description = data.description
         await session.commit()
         return project
 

@@ -8,6 +8,8 @@ MAX_EMAIL_LENGTH = 320
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
 MAX_ACCESS_TOKEN_LENGTH = 2048
+MAX_PROJECT_DESCRIPTION_LENGTH = 2000
+MAX_TASK_DESCRIPTION_LENGTH = 2000
 
 _email_adapter = TypeAdapter(EmailStr)
 
@@ -36,6 +38,42 @@ def normalize_email(value: str) -> str:
         return str(_email_adapter.validate_python(candidate))
     except ValidationError as error:
         raise ValueError("Invalid email format") from error
+
+
+def normalize_project_description(value: str | None) -> str | None:
+    """Normalize optional project copy while preserving an explicit empty value as null."""
+
+    if value is None:
+        return None
+    normalized = " ".join(unicodedata.normalize("NFKC", value).split())
+    if not normalized:
+        return None
+    if len(normalized) > MAX_PROJECT_DESCRIPTION_LENGTH:
+        raise ValueError(
+            "Project description must not exceed "
+            f"{MAX_PROJECT_DESCRIPTION_LENGTH} characters"
+        )
+    if any(unicodedata.category(character).startswith("C") for character in normalized):
+        raise ValueError("Project description contains unsupported control characters")
+    return normalized
+
+
+def normalize_task_description(value: str | None) -> str | None:
+    """Normalize optional task copy and reject control characters."""
+
+    if value is None:
+        return None
+    normalized = " ".join(unicodedata.normalize("NFKC", value).split())
+    if not normalized:
+        return None
+    if len(normalized) > MAX_TASK_DESCRIPTION_LENGTH:
+        raise ValueError(
+            "Task description must not exceed "
+            f"{MAX_TASK_DESCRIPTION_LENGTH} characters"
+        )
+    if any(unicodedata.category(character).startswith("C") for character in normalized):
+        raise ValueError("Task description contains unsupported control characters")
+    return normalized
 
 
 def normalize_password(value: str) -> str:

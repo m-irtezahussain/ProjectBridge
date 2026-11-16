@@ -82,17 +82,26 @@ async def test_project_crud_and_soft_dismissal() -> None:
     created = await manager.create_project(
         session,
         "access-token",
-        ProjectCreate(name="Client Portal", status=ProjectStatus.ACTIVE),
+        ProjectCreate(
+            name="Client Portal",
+            description="Initial delivery scope",
+            status=ProjectStatus.ACTIVE,
+        ),
     )
     updated = await manager.update_project(
         session,
         "access-token",
         created.id,
-        ProjectUpdate(name="Customer Portal", status=ProjectStatus.AT_RISK),
+        ProjectUpdate(
+            name="Customer Portal",
+            description=None,
+            status=ProjectStatus.AT_RISK,
+        ),
     )
 
     assert created.business_id == 11
     assert updated.name == "Customer Portal"
+    assert updated.description is None
     assert updated.status is ProjectStatus.AT_RISK
     assert await manager.list_projects(session, "access-token") == [created]
 

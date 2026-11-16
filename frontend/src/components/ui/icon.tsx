@@ -3,22 +3,31 @@ import type { ReactNode } from "react";
 
 export type IconName =
   | "arrow"
+  | "calendar"
   | "check"
   | "chevron"
   | "command"
   | "document"
   | "edit"
   | "layers"
+  | "list"
   | "lock"
   | "search"
   | "spark"
   | "trash"
+  | "kanban"
   | "users";
 
 type IconProps = SVGProps<SVGSVGElement> & Readonly<{ name: IconName }>;
 
 const paths: Record<IconName, ReactNode> = {
   arrow: <path d="M5 12h14m-5-5 5 5-5 5" />,
+  calendar: (
+    <>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M16 3v4M8 3v4M3 10h18" />
+    </>
+  ),
   check: <path d="m5 12 4 4L19 6" />,
   chevron: <path d="m9 18 6-6-6-6" />,
   command: (
@@ -45,6 +54,7 @@ const paths: Record<IconName, ReactNode> = {
       <path d="m3 12 9 5 9-5M3 17l9 5 9-5" />
     </>
   ),
+  list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
   lock: (
     <>
       <rect x="4" y="10" width="16" height="11" rx="2" />
@@ -62,6 +72,12 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6" />
       <path d="M10 11v5M14 11v5" />
+    </>
+  ),
+  kanban: (
+    <>
+      <rect x="3" y="3" width="7" height="18" rx="1.5" />
+      <rect x="14" y="3" width="7" height="11" rx="1.5" />
     </>
   ),
   users: (

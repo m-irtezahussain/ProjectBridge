@@ -3,6 +3,7 @@
 from app.schemas.auth import LoginRequest, NavigationResponse, SessionResponse
 from app.schemas.business import BusinessCreate, BusinessRead
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
+from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 from app.schemas.user import UserCreate, UserRead
 
 __all__ = [
@@ -14,6 +15,9 @@ __all__ = [
     "ProjectRead",
     "ProjectUpdate",
     "SessionResponse",
+    "TaskCreate",
+    "TaskRead",
+    "TaskUpdate",
     "UserCreate",
     "UserRead",
 ]
