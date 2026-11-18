@@ -12,6 +12,13 @@ x-backend-environment: &backend-environment
   APP_CORS_ORIGINS: '${APP_CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://0.0.0.0:3000"]}'
   APP_MCP_ALLOWED_HOSTS: '${APP_MCP_ALLOWED_HOSTS:-["localhost","localhost:*","127.0.0.1","127.0.0.1:*"]}'
   APP_MCP_ALLOWED_ORIGINS: '${APP_MCP_ALLOWED_ORIGINS:-["http://localhost:3000"]}'
+  APP_WEB_URL: ${APP_WEB_URL:-http://localhost:3000}
+  APP_MCP_ISSUER: ${APP_MCP_ISSUER:-http://localhost:8000}
+  APP_MCP_RESOURCE: ${APP_MCP_RESOURCE:-http://localhost:8000/mcp/}
+  APP_MCP_JWT_SECRET: ${APP_MCP_JWT_SECRET:-projectbridge-mcp-development-secret-change-before-production}
+  APP_MCP_ACCESS_MINUTES: ${APP_MCP_ACCESS_MINUTES:-15}
+  APP_MCP_REFRESH_DAYS: ${APP_MCP_REFRESH_DAYS:-30}
+  APP_MCP_AUTHORIZATION_CODE_MINUTES: ${APP_MCP_AUTHORIZATION_CODE_MINUTES:-5}
 
 services:
   db:

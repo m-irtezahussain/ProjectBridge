@@ -5,7 +5,8 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.core.managers import AuthManager, ProjectManager, TaskManager
+from app.core.managers import AuthManager, OAuthManager, ProjectManager, TaskManager
+from app.core.services.mcp_oauth import MCPTokenService
 from app.core.services.rate_limits import AuthRateLimiter
 from app.core.services.refresh_tokens import RefreshTokenService
 from app.core.services.tokens import TokenService
@@ -21,6 +22,15 @@ def get_auth_manager() -> AuthManager:
 
 
 AuthManagerDep = Annotated[AuthManager, Depends(get_auth_manager)]
+
+
+@lru_cache
+def get_oauth_manager() -> OAuthManager:
+    settings = get_settings()
+    return OAuthManager(settings, MCPTokenService(settings))
+
+
+OAuthManagerDep = Annotated[OAuthManager, Depends(get_oauth_manager)]
 
 
 @lru_cache

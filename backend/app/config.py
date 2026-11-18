@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -68,6 +69,49 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"],
         validation_alias="APP_MCP_ALLOWED_ORIGINS",
     )
+    web_url: str = Field(
+        default="http://localhost:3000", validation_alias="APP_WEB_URL"
+    )
+    mcp_issuer: str = Field(
+        default="http://localhost:8000", validation_alias="APP_MCP_ISSUER"
+    )
+    mcp_resource: str = Field(
+        default="http://localhost:8000/mcp/", validation_alias="APP_MCP_RESOURCE"
+    )
+    mcp_jwt_secret: str = Field(
+        default="projectbridge-mcp-development-secret-change-before-production",
+        min_length=32,
+        validation_alias="APP_MCP_JWT_SECRET",
+    )
+    mcp_access_minutes: int = Field(
+        default=15, ge=5, le=60, validation_alias="APP_MCP_ACCESS_MINUTES"
+    )
+    mcp_refresh_days: int = Field(
+        default=30, ge=1, le=90, validation_alias="APP_MCP_REFRESH_DAYS"
+    )
+    mcp_authorization_code_minutes: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        validation_alias="APP_MCP_AUTHORIZATION_CODE_MINUTES",
+    )
+
+    @model_validator(mode="after")
+    def validate_public_urls_and_mcp_secret(self) -> "Settings":
+        for field_name in ("web_url", "mcp_issuer", "mcp_resource"):
+            value = getattr(self, field_name)
+            parsed = urlsplit(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(f"{field_name} must be an absolute HTTP(S) URL")
+            if parsed.username or parsed.password or parsed.fragment:
+                raise ValueError(f"{field_name} must not contain credentials or a fragment")
+            if self.environment == "production" and parsed.scheme != "https":
+                raise ValueError(f"{field_name} must use HTTPS in production")
+        if self.environment == "production" and self.mcp_jwt_secret == (
+            "projectbridge-mcp-development-secret-change-before-production"
+        ):
+            raise ValueError("APP_MCP_JWT_SECRET must be set in production")
+        return self
 
 
 @lru_cache

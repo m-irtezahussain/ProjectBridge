@@ -8,6 +8,7 @@ import { PasswordField } from "@/components/auth/password-field";
 import { passwordGuidance, passwordScore } from "@/components/auth/password-strength";
 import { Icon } from "@/components/ui/icon";
 import { login, signup } from "@/services/auth-api";
+import { safeOAuthReturnUrl } from "@/services/api-base";
 
 type AuthFormProps = Readonly<{ mode: "login" | "signup" }>;
 
@@ -35,6 +36,13 @@ export function AuthForm({ mode }: AuthFormProps) {
             email: String(form.get("email")),
             password: String(form.get("password")),
           });
+      const oauthReturn = !isSignup
+        ? safeOAuthReturnUrl(new URLSearchParams(window.location.search).get("return_to"))
+        : null;
+      if (oauthReturn !== null) {
+        window.location.assign(oauthReturn);
+        return;
+      }
       router.push(result.next);
       router.refresh();
     } catch (error) {

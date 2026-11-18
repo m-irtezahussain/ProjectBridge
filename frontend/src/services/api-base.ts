@@ -23,3 +23,21 @@ export function publicApiBaseUrl(): string {
     typeof window === "undefined" ? undefined : window.location.hostname;
   return resolvePublicApiUrl(configuredPublicApiUrl, browserHostname);
 }
+
+export function safeOAuthReturnUrl(candidate: string | null): string | null {
+  if (candidate === null) return null;
+  try {
+    const target = new URL(candidate);
+    const api = new URL(publicApiBaseUrl());
+    const bothLoopback =
+      localHostnames.has(target.hostname) && localHostnames.has(api.hostname);
+    const matchingOrigin =
+      target.origin === api.origin ||
+      (bothLoopback && target.protocol === api.protocol && target.port === api.port);
+    return matchingOrigin && target.pathname === "/oauth/authorize"
+      ? target.href
+      : null;
+  } catch {
+    return null;
+  }
+}

@@ -2,6 +2,13 @@
 
 from app.schemas.auth import LoginRequest, NavigationResponse, SessionResponse
 from app.schemas.business import BusinessCreate, BusinessRead
+from app.schemas.oauth import (
+    OAuthClientRegistrationRequest,
+    OAuthClientRegistrationResponse,
+    OAuthErrorResponse,
+    OAuthRevocationResponse,
+    OAuthTokenResponse,
+)
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 from app.schemas.user import UserCreate, UserRead
@@ -11,6 +18,11 @@ __all__ = [
     "BusinessRead",
     "LoginRequest",
     "NavigationResponse",
+    "OAuthClientRegistrationRequest",
+    "OAuthClientRegistrationResponse",
+    "OAuthErrorResponse",
+    "OAuthRevocationResponse",
+    "OAuthTokenResponse",
     "ProjectCreate",
     "ProjectRead",
     "ProjectUpdate",
@@ -21,4 +33,3 @@ __all__ = [
     "UserCreate",
     "UserRead",
 ]
-

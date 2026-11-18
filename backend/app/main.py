@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.api.routers.oauth import router as oauth_router
 from app.config import get_settings
 from app.db import create_database
 from app.mcp.server import mcp_http_app, mcp_server
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
         max_age=7200,
     )
     app.include_router(api_router)
+    app.include_router(oauth_router)
     app.mount("/mcp", mcp_http_app)
     return app
 
