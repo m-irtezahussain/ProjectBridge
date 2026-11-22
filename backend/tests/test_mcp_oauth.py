@@ -129,6 +129,7 @@ def test_mcp_access_token_is_bound_to_its_own_issuer_audience_and_scopes() -> No
     assert claims.user_id == 7
     assert claims.grant_id == "grant-id"
     assert claims.scopes == {"projects:read", "tasks:read"}
+    assert claims.expires_at > int(datetime.now().timestamp())
 
 
 def test_pkce_and_redirect_validation_reject_unsafe_values() -> None:

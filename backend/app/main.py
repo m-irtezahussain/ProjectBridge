@@ -8,7 +8,7 @@ from app.api.router import api_router
 from app.api.routers.oauth import router as oauth_router
 from app.config import get_settings
 from app.db import create_database
-from app.mcp.server import mcp_http_app, mcp_server
+from app.mcp.server import mcp_http_app, mcp_server, mcp_sessions
 
 
 @asynccontextmanager
@@ -17,11 +17,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine, session_factory = create_database(settings.database_url)
     app.state.engine = engine
     app.state.session_factory = session_factory
+    mcp_sessions.configure(session_factory)
 
-    async with mcp_server.session_manager.run():
-        yield
-
-    await engine.dispose()
+    try:
+        async with mcp_server.session_manager.run():
+            yield
+    finally:
+        mcp_sessions.clear()
+        await engine.dispose()
 
 
 def create_app() -> FastAPI:

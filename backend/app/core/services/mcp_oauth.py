@@ -38,6 +38,7 @@ class MCPAccessClaims:
     grant_id: str
     client_id: str
     scopes: frozenset[str]
+    expires_at: int
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class MCPTokenService:
                 grant_id=str(payload["grant_id"]),
                 client_id=str(payload["client_id"]),
                 scopes=scopes,
+                expires_at=int(payload["exp"]),
             )
         except OAuthProtocolError:
             raise

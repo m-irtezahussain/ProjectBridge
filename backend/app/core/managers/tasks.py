@@ -2,8 +2,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.managers.auth import AuthenticationError, AuthManager
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
-from app.models import Business, Task, TaskSource
+from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_mutations import (
+    IdempotencyConflictError,
+    IdempotencyInProgressError,
+    MCPMutationResult,
+    request_fingerprint,
+)
+from app.models import Business, Task, TaskPriority, TaskSource, TaskStatus
 from app.repositories.businesses import BusinessRepository
+from app.repositories.mcp_operations import (
+    MCPAuditRepository,
+    MCPIdempotencyRepository,
+)
 from app.repositories.projects import ProjectRepository
 from app.repositories.tasks import TaskRepository
 from app.schemas.task import TaskCreate, TaskUpdate
@@ -22,11 +33,15 @@ class TaskManager:
         businesses: BusinessRepository | None = None,
         projects: ProjectRepository | None = None,
         tasks: TaskRepository | None = None,
+        idempotency: MCPIdempotencyRepository | None = None,
+        audit: MCPAuditRepository | None = None,
     ) -> None:
         self._auth = auth
         self._businesses = businesses or BusinessRepository()
         self._projects = projects or ProjectRepository()
         self._tasks = tasks or TaskRepository()
+        self._idempotency = idempotency or MCPIdempotencyRepository()
+        self._audit = audit or MCPAuditRepository()
 
     async def _get_business(
         self, session: AsyncSession, access_token: str | None
@@ -123,3 +138,238 @@ class TaskManager:
         task = await self.get_task(session, access_token, project_id, task_id)
         task.is_deleted = True
         await session.commit()
+
+    async def _require_principal_business(
+        self, session: AsyncSession, principal: MCPPrincipal
+    ) -> Business:
+        business = await self._businesses.get_for_owner(session, principal.user_id)
+        if business is None or business.id != principal.business_id:
+            raise BusinessRequiredError("Business registration required")
+        return business
+
+    async def create_task_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+        data: TaskCreate,
+        idempotency_key: str,
+    ) -> MCPMutationResult[Task]:
+        await self._require_principal_business(session, principal)
+        tool_name = "create_task"
+        try:
+            await self._require_project(session, principal.business_id, project_id)
+        except ProjectNotFoundError:
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="project",
+                target_id=project_id,
+                outcome="not_found",
+            )
+            await session.commit()
+            raise
+        fingerprint = request_fingerprint(
+            tool_name,
+            {
+                "project_id": project_id,
+                "task": data.model_dump(mode="json"),
+            },
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if not claim.is_new:
+            if claim.record.request_fingerprint != fingerprint:
+                self._audit.add(
+                    session,
+                    principal=principal,
+                    tool_name=tool_name,
+                    target_type="task",
+                    target_id=claim.record.result_id,
+                    outcome="idempotency_conflict",
+                )
+                await session.commit()
+                raise IdempotencyConflictError(
+                    "Idempotency key was already used with different input"
+                )
+            if (
+                claim.record.state != "completed"
+                or claim.record.result_type != "task"
+                or claim.record.result_id is None
+                or claim.record.response_body is None
+            ):
+                self._audit.add(
+                    session,
+                    principal=principal,
+                    tool_name=tool_name,
+                    target_type="task",
+                    target_id=claim.record.result_id,
+                    outcome="in_progress",
+                )
+                await session.commit()
+                raise IdempotencyInProgressError("Create task is still in progress")
+            task = self._task_from_snapshot(claim.record.response_body)
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task.id,
+                outcome="idempotent_replay",
+            )
+            await session.commit()
+            return MCPMutationResult(entity=task, replayed=True)
+
+        task = Task(
+            title=data.title,
+            description=data.description,
+            status=data.status,
+            priority=data.priority,
+            project_id=project_id,
+            created_by=TaskSource.MCP,
+        )
+        self._tasks.add(session, task)
+        await session.flush()
+        snapshot: dict[str, object] = {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status.value,
+            "priority": task.priority.value,
+            "project_id": task.project_id,
+        }
+        self._idempotency.complete(
+            claim.record,
+            result_type="task",
+            result_id=task.id,
+            response_body=snapshot,
+        )
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            target_type="task",
+            target_id=task.id,
+            outcome="success",
+        )
+        await session.commit()
+        return MCPMutationResult(entity=task, replayed=False)
+
+    async def update_task_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+        task_id: int,
+        data: TaskUpdate,
+    ) -> Task:
+        await self._require_principal_business(session, principal)
+        task = await self._tasks.get_active(
+            session, principal.business_id, project_id, task_id
+        )
+        if task is None:
+            await self._audit_task_not_found(
+                session, principal, "update_task", task_id
+            )
+            raise TaskNotFoundError("Task not found")
+        if data.title is not None:
+            task.title = data.title
+        if "description" in data.model_fields_set:
+            task.description = data.description
+        if data.status is not None:
+            task.status = data.status
+        if data.priority is not None:
+            task.priority = data.priority
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name="update_task",
+            target_type="task",
+            target_id=task.id,
+            outcome="success",
+        )
+        await session.commit()
+        return task
+
+    async def archive_task_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+        task_id: int,
+    ) -> None:
+        await self._require_principal_business(session, principal)
+        task = await self._tasks.get_active(
+            session, principal.business_id, project_id, task_id
+        )
+        if task is None:
+            await self._audit_task_not_found(
+                session, principal, "archive_task", task_id
+            )
+            raise TaskNotFoundError("Task not found")
+        task.is_deleted = True
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name="archive_task",
+            target_type="task",
+            target_id=task.id,
+            outcome="success",
+        )
+        await session.commit()
+
+    async def _audit_task_not_found(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        tool_name: str,
+        task_id: int,
+    ) -> None:
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            target_type="task",
+            target_id=task_id,
+            outcome="not_found",
+        )
+        await session.commit()
+
+    @staticmethod
+    def _task_from_snapshot(snapshot: dict[str, object]) -> Task:
+        try:
+            task_id_value = snapshot["id"]
+            project_id_value = snapshot["project_id"]
+            if (
+                not isinstance(task_id_value, int)
+                or isinstance(task_id_value, bool)
+                or not isinstance(project_id_value, int)
+                or isinstance(project_id_value, bool)
+            ):
+                raise TypeError
+            task_id = task_id_value
+            title = str(snapshot["title"])
+            description_value = snapshot.get("description")
+            description = (
+                str(description_value) if description_value is not None else None
+            )
+            status = TaskStatus(str(snapshot["status"]))
+            priority = TaskPriority(str(snapshot["priority"]))
+            project_id = project_id_value
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Stored task idempotency result is invalid") from exc
+        return Task(
+            id=task_id,
+            title=title,
+            description=description,
+            status=status,
+            priority=priority,
+            project_id=project_id,
+            created_by=TaskSource.MCP,
+        )

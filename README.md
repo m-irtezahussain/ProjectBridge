@@ -28,9 +28,13 @@ Then open:
 - Database readiness: <http://localhost:8000/api/v1/health/ready>
 - MCP Streamable HTTP: `http://localhost:8000/mcp/`
 
-The MCP server initially exposes `get_service_status`. It deliberately uses the same
-`StatusService` as the REST liveness route to demonstrate the one-core/two-interface
-architecture.
+The MCP server exposes authenticated account, project, and task tools. Read tools include
+`get_current_account`, `list_projects`, and `get_project`; write tools include project creation
+and updates plus task creation, updates, and soft archival. The HTTP MCP endpoint requires a
+ProjectBridge MCP OAuth access token and resolves its user, active grant, scopes, and owned
+business before accepting a request. Retryable creates require an idempotency key and every MCP
+write records an audit outcome. `get_service_status` uses the same `StatusService` as the REST
+liveness route to demonstrate the one-core/two-interface architecture.
 
 Stop containers while retaining the PostgreSQL volume:
 
@@ -58,7 +62,9 @@ Backend commands run inside its development image:
 docker compose run --rm backend uv run pytest
 docker compose run --rm backend uv run ruff check .
 docker compose run --rm backend uv run mypy app
-docker compose exec backend uv run python scripts/check_mcp.py
+docker compose exec \
+  -e PROJECTBRIDGE_MCP_ACCESS_TOKEN="$PROJECTBRIDGE_MCP_ACCESS_TOKEN" \
+  backend uv run python scripts/check_mcp.py
 ```
 
 Frontend commands:

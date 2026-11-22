@@ -1,17 +1,36 @@
 """Smoke-test the running MCP HTTP endpoint from inside the backend container."""
 
 import json
+import os
 
 import anyio
-from mcp import Client
+from mcp.client.session_group import ClientSessionGroup, StreamableHttpParameters
 
 
 async def main() -> None:
-    async with Client("http://localhost:8000/mcp/") as client:
-        tools = await client.list_tools()
-        result = await client.call_tool("get_service_status", {})
+    access_token = os.environ.get("PROJECTBRIDGE_MCP_ACCESS_TOKEN")
+    if access_token is None:
+        raise RuntimeError("PROJECTBRIDGE_MCP_ACCESS_TOKEN is required")
+    parameters = StreamableHttpParameters(
+        url="http://localhost:8000/mcp/",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    async with ClientSessionGroup() as group:
+        session = await group.connect_to_server(parameters)
+        tools = await session.list_tools()
+        result = await session.call_tool("get_service_status", {})
 
-    assert [tool.name for tool in tools.tools] == ["get_service_status"]
+    assert [tool.name for tool in tools.tools] == [
+        "get_service_status",
+        "get_current_account",
+        "list_projects",
+        "get_project",
+        "create_project",
+        "update_project",
+        "create_task",
+        "update_task",
+        "archive_task",
+    ]
     assert result.is_error is False
     print(json.dumps(result.structured_content, sort_keys=True))
 

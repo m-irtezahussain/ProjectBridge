@@ -3,8 +3,19 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.managers.auth import AuthenticationError, AuthManager
-from app.models import Business, Project
+from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_mutations import (
+    IdempotencyConflictError,
+    IdempotencyInProgressError,
+    MCPMutationResult,
+    request_fingerprint,
+)
+from app.models import Business, Project, ProjectStatus
 from app.repositories.businesses import BusinessRepository
+from app.repositories.mcp_operations import (
+    MCPAuditRepository,
+    MCPIdempotencyRepository,
+)
 from app.repositories.projects import ProjectRepository
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
@@ -25,10 +36,14 @@ class ProjectManager:
         auth: AuthManager,
         businesses: BusinessRepository | None = None,
         projects: ProjectRepository | None = None,
+        idempotency: MCPIdempotencyRepository | None = None,
+        audit: MCPAuditRepository | None = None,
     ) -> None:
         self._auth = auth
         self._businesses = businesses or BusinessRepository()
         self._projects = projects or ProjectRepository()
+        self._idempotency = idempotency or MCPIdempotencyRepository()
+        self._audit = audit or MCPAuditRepository()
 
     async def _get_business(
         self, session: AsyncSession, access_token: str | None
@@ -55,6 +70,197 @@ class ProjectManager:
         if project is None:
             raise ProjectNotFoundError("Project not found")
         return project
+
+    async def list_projects_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        status: ProjectStatus | None = None,
+    ) -> list[Project]:
+        await self._require_principal_business(session, principal)
+        return await self._projects.list_active(
+            session, principal.business_id, status=status
+        )
+
+    async def get_project_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+    ) -> Project:
+        await self._require_principal_business(session, principal)
+        project = await self._projects.get_active(
+            session, principal.business_id, project_id
+        )
+        if project is None:
+            raise ProjectNotFoundError("Project not found")
+        return project
+
+    async def _require_principal_business(
+        self, session: AsyncSession, principal: MCPPrincipal
+    ) -> Business:
+        business = await self._businesses.get_for_owner(session, principal.user_id)
+        if business is None or business.id != principal.business_id:
+            raise BusinessRequiredError("Business registration required")
+        return business
+
+    async def create_project_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        data: ProjectCreate,
+        idempotency_key: str,
+    ) -> MCPMutationResult[Project]:
+        await self._require_principal_business(session, principal)
+        tool_name = "create_project"
+        fingerprint = request_fingerprint(tool_name, data)
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if not claim.is_new:
+            if claim.record.request_fingerprint != fingerprint:
+                self._audit.add(
+                    session,
+                    principal=principal,
+                    tool_name=tool_name,
+                    target_type="project",
+                    target_id=claim.record.result_id,
+                    outcome="idempotency_conflict",
+                )
+                await session.commit()
+                raise IdempotencyConflictError(
+                    "Idempotency key was already used with different input"
+                )
+            if (
+                claim.record.state != "completed"
+                or claim.record.result_type != "project"
+                or claim.record.result_id is None
+                or claim.record.response_body is None
+            ):
+                self._audit.add(
+                    session,
+                    principal=principal,
+                    tool_name=tool_name,
+                    target_type="project",
+                    target_id=claim.record.result_id,
+                    outcome="in_progress",
+                )
+                await session.commit()
+                raise IdempotencyInProgressError("Create project is still in progress")
+            project = self._project_from_snapshot(
+                claim.record.response_body, principal.business_id
+            )
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="project",
+                target_id=project.id,
+                outcome="idempotent_replay",
+            )
+            await session.commit()
+            return MCPMutationResult(entity=project, replayed=True)
+
+        project = Project(
+            name=data.name,
+            description=data.description,
+            business_id=principal.business_id,
+            status=data.status,
+        )
+        self._projects.add(session, project)
+        await session.flush()
+        snapshot: dict[str, object] = {
+            "id": project.id,
+            "name": project.name,
+            "description": project.description,
+            "status": project.status.value,
+        }
+        self._idempotency.complete(
+            claim.record,
+            result_type="project",
+            result_id=project.id,
+            response_body=snapshot,
+        )
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            target_type="project",
+            target_id=project.id,
+            outcome="success",
+        )
+        await session.commit()
+        return MCPMutationResult(entity=project, replayed=False)
+
+    async def update_project_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+        data: ProjectUpdate,
+    ) -> Project:
+        await self._require_principal_business(session, principal)
+        project = await self._projects.get_active(
+            session, principal.business_id, project_id
+        )
+        if project is None:
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name="update_project",
+                target_type="project",
+                target_id=project_id,
+                outcome="not_found",
+            )
+            await session.commit()
+            raise ProjectNotFoundError("Project not found")
+        if data.name is not None:
+            project.name = data.name
+        if data.status is not None:
+            project.status = data.status
+        if "description" in data.model_fields_set:
+            project.description = data.description
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name="update_project",
+            target_type="project",
+            target_id=project.id,
+            outcome="success",
+        )
+        await session.commit()
+        return project
+
+    @staticmethod
+    def _project_from_snapshot(
+        snapshot: dict[str, object], business_id: int
+    ) -> Project:
+        try:
+            project_id_value = snapshot["id"]
+            if not isinstance(project_id_value, int) or isinstance(
+                project_id_value, bool
+            ):
+                raise TypeError
+            project_id = project_id_value
+            name = str(snapshot["name"])
+            description_value = snapshot.get("description")
+            description = (
+                str(description_value) if description_value is not None else None
+            )
+            status = ProjectStatus(str(snapshot["status"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Stored project idempotency result is invalid") from exc
+        return Project(
+            id=project_id,
+            name=name,
+            description=description,
+            business_id=business_id,
+            status=status,
+        )
 
     async def create_project(
         self,
