@@ -26,6 +26,9 @@ class FakeSessions:
 
 
 class FakeProjects:
+    def __init__(self) -> None:
+        self.archived = False
+
     async def create_project_for_principal(
         self,
         _session: object,
@@ -58,6 +61,13 @@ class FakeProjects:
             business_id=principal.business_id,
             status=data.status or ProjectStatus.PLANNING,
         )
+
+    async def archive_project_for_principal(
+        self, _session: object, _principal: MCPPrincipal, _project_id: int
+    ) -> bool:
+        replayed = self.archived
+        self.archived = True
+        return replayed
 
 
 class FakeTasks:
@@ -100,6 +110,7 @@ class FakeTasks:
             status=data.status or TaskStatus.TODO,
             priority=data.priority or TaskPriority.MEDIUM,
             project_id=project_id,
+            assignee_id=data.assignee_id,
             created_by=TaskSource.MCP,
         )
 
@@ -109,8 +120,28 @@ class FakeTasks:
         _principal: MCPPrincipal,
         _project_id: int,
         _task_id: int,
-    ) -> None:
+    ) -> bool:
+        replayed = self.archived
         self.archived = True
+        return replayed
+
+    async def assign_task_for_principal(
+        self,
+        _session: object,
+        _principal: MCPPrincipal,
+        project_id: int,
+        task_id: int,
+        assignee_id: int,
+    ) -> Task:
+        return Task(
+            id=task_id,
+            title="Prepare release",
+            status=TaskStatus.TODO,
+            priority=TaskPriority.MEDIUM,
+            project_id=project_id,
+            assignee_id=assignee_id,
+            created_by=TaskSource.MCP,
+        )
 
 
 @pytest.mark.asyncio
@@ -119,10 +150,11 @@ async def test_write_tools_return_typed_results_and_archive(
 ) -> None:
     server = MCPServer("write-tools-test")
     tasks = FakeTasks()
+    projects = FakeProjects()
     register_write_tools(
         server,
         FakeSessions(),  # type: ignore[arg-type]
-        FakeProjects(),  # type: ignore[arg-type]
+        projects,  # type: ignore[arg-type]
         tasks,  # type: ignore[arg-type]
     )
     principal = MCPPrincipal(
@@ -148,6 +180,9 @@ async def test_write_tools_return_typed_results_and_archive(
             "update_project",
             {"input": {"project_id": 4, "status": "Completed"}},
         )
+        archived_project = await client.call_tool(
+            "archive_project", {"input": {"project_id": 4}}
+        )
         task = await client.call_tool(
             "create_task",
             {
@@ -169,6 +204,10 @@ async def test_write_tools_return_typed_results_and_archive(
                 }
             },
         )
+        assigned_task = await client.call_tool(
+            "assign_task",
+            {"input": {"project_id": 4, "task_id": 8, "assignee_id": 7}},
+        )
         archived = await client.call_tool(
             "archive_task",
             {"input": {"project_id": 4, "task_id": 8}},
@@ -188,7 +227,17 @@ async def test_write_tools_return_typed_results_and_archive(
     assert updated_project.structured_content["status"] == "Completed"
     assert task.structured_content["task"]["priority"] == "high"
     assert updated_task.structured_content["status"] == "done"
-    assert archived.structured_content == {"task_id": 8, "archived": True}
+    assert assigned_task.structured_content["assignee_id"] == 7
+    assert archived_project.structured_content == {
+        "project_id": 4,
+        "archived": True,
+        "replayed": False,
+    }
+    assert archived.structured_content == {
+        "task_id": 8,
+        "archived": True,
+        "replayed": False,
+    }
     assert tasks.archived is True
     assert missing_key.is_error is True
     assert empty_update.is_error is True

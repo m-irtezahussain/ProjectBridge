@@ -19,6 +19,8 @@ MCP_SCOPES = frozenset(
         "projects:write",
         "tasks:read",
         "tasks:write",
+        "documents:read",
+        "documents:write",
         "offline_access",
     }
 )

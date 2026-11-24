@@ -21,6 +21,7 @@ class TaskCreate(BaseModel):
     )
     status: TaskStatus = TaskStatus.TODO
     priority: TaskPriority = TaskPriority.MEDIUM
+    assignee_id: int | None = Field(default=None, gt=0)
 
     @field_validator("title")
     @classmethod
@@ -47,6 +48,7 @@ class TaskUpdate(BaseModel):
     )
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
+    assignee_id: int | None = Field(default=None, gt=0)
 
     @field_validator("title")
     @classmethod
@@ -78,6 +80,7 @@ class TaskRead(BaseModel):
     description: str | None
     status: TaskStatus
     priority: TaskPriority
+    assignee_id: int | None
     project_id: int
     is_deleted: bool
     created_by: TaskSource

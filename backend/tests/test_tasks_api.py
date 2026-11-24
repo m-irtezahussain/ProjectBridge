@@ -119,6 +119,7 @@ async def test_tasks_crud_contract_and_validation() -> None:
         "description": "Confirm every dependency.",
         "status": "in process",
         "priority": "high",
+        "assignee_id": None,
         "project_id": 4,
         "is_deleted": False,
         "created_by": "api",

@@ -3,6 +3,9 @@ from sqlalchemy import inspect
 
 from app.models import (
     Business,
+    Document,
+    DocumentAuditEvent,
+    DocumentStatus,
     Project,
     ProjectStatus,
     Task,
@@ -133,6 +136,7 @@ def test_task_table_contains_project_state_and_source_columns() -> None:
         "status",
         "priority",
         "project_id",
+        "assignee_id",
         "is_deleted",
         "created_by",
     }
@@ -167,4 +171,37 @@ def test_task_model_normalizes_and_validates_fields() -> None:
     with pytest.raises(ValueError, match="Invalid task source"):
         Task(title="Valid task", project_id=4, created_by="web")
 
+
+def test_document_tables_capture_immutable_metadata_and_audit_history() -> None:
+    columns = {column.name for column in inspect(Document).columns}
+    audit_columns = {column.name for column in inspect(DocumentAuditEvent).columns}
+
+    assert {
+        "business_id",
+        "project_id",
+        "uploaded_by_user_id",
+        "original_filename",
+        "declared_mime_type",
+        "detected_mime_type",
+        "declared_size",
+        "size_bytes",
+        "content_sha256",
+        "quarantine_key",
+        "storage_key",
+        "status",
+        "failure_code",
+        "failure_message",
+        "duplicate_of_document_id",
+        "archived_at",
+    }.issubset(columns)
+    assert DocumentStatus.AVAILABLE.value == "available"
+    assert {
+        "document_id",
+        "business_id",
+        "actor_user_id",
+        "action",
+        "outcome",
+        "details",
+        "occurred_at",
+    }.issubset(audit_columns)
 

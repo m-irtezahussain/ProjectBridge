@@ -1,22 +1,48 @@
-from typing import Annotated
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Annotated, Literal
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from app.core.managers import AccountManager, ProjectManager, TaskManager
+from app.core.managers.accounts import AccountNotFoundError
+from app.core.managers.auth import AuthenticationError
+from app.core.managers.documents import (
+    DocumentNotFoundError,
+    DocumentStateConflictError,
+)
+from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
+from app.core.managers.tasks import AssigneeNotFoundError, TaskNotFoundError
+from app.core.services.document_storage import DocumentStorageError
+from app.core.services.document_validation import DocumentValidationError
+from app.core.services.mcp_auth import MCPAuthenticationError, MCPAuthorizationError
+from app.core.services.mcp_mutations import (
+    IdempotencyConflictError,
+    IdempotencyInProgressError,
+)
 from app.mcp.auth import MCPDatabaseSessions, require_mcp_principal
 from app.models.project import ProjectStatus
 from app.schemas.mcp_tools import (
+    ArchiveProjectInput,
+    ArchiveProjectResult,
     ArchiveTaskInput,
     ArchiveTaskResult,
+    AssigneeListResult,
+    AssigneeSummary,
+    AssignTaskInput,
     CreateProjectInput,
     CreateTaskInput,
     CurrentAccountSummary,
+    MCPErrorDetail,
     ProjectListInput,
     ProjectListResult,
     ProjectMutationResult,
     ProjectSummary,
+    TaskListInput,
+    TaskListResult,
     TaskMutationResult,
     TaskSummary,
     UpdateProjectInput,
@@ -35,18 +61,70 @@ IDEMPOTENT_CREATE = ToolAnnotations(
     idempotentHint=True,
     openWorldHint=False,
 )
+IDEMPOTENT_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 WRITE = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=False,
     openWorldHint=False,
 )
-DESTRUCTIVE_WRITE = ToolAnnotations(
+IDEMPOTENT_DESTRUCTIVE_WRITE = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=True,
-    idempotentHint=False,
+    idempotentHint=True,
     openWorldHint=False,
 )
+
+
+@asynccontextmanager
+async def structured_mcp_errors() -> AsyncIterator[None]:
+    """Translate shared-core failures into a stable machine-readable MCP error."""
+    try:
+        yield
+    except ValidationError as error:
+        detail = MCPErrorDetail(
+            code="validation_error",
+            message="Invalid tool input",
+        )
+        raise ToolError(detail.model_dump_json()) from error
+    except DocumentValidationError as error:
+        detail = MCPErrorDetail(code="validation_error", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except MCPAuthenticationError as error:
+        detail = MCPErrorDetail(code="authentication_error", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except (MCPAuthorizationError, AuthenticationError, BusinessRequiredError) as error:
+        detail = MCPErrorDetail(code="authorization_error", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except (
+        AccountNotFoundError,
+        DocumentNotFoundError,
+        ProjectNotFoundError,
+        TaskNotFoundError,
+    ) as error:
+        detail = MCPErrorDetail(code="not_found", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except AssigneeNotFoundError as error:
+        detail = MCPErrorDetail(code="validation_error", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except (IdempotencyConflictError, IdempotencyInProgressError) as error:
+        detail = MCPErrorDetail(code="conflict", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except DocumentStateConflictError as error:
+        detail = MCPErrorDetail(code="conflict", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except DocumentStorageError as error:
+        detail = MCPErrorDetail(
+            code="conflict",
+            message="Document storage is temporarily unavailable",
+            retryable=True,
+        )
+        raise ToolError(detail.model_dump_json()) from error
 
 
 def register_read_tools(
@@ -54,6 +132,7 @@ def register_read_tools(
     sessions: MCPDatabaseSessions,
     accounts: AccountManager,
     projects: ProjectManager,
+    tasks: TaskManager,
 ) -> None:
     @server.tool(
         description=(
@@ -64,9 +143,10 @@ def register_read_tools(
         structured_output=True,
     )
     async def get_current_account() -> CurrentAccountSummary:
-        principal = require_mcp_principal()
-        async with sessions.session() as session:
-            user, business = await accounts.get_current_account(session, principal)
+        async with structured_mcp_errors():
+            principal = require_mcp_principal()
+            async with sessions.session() as session:
+                user, business = await accounts.get_current_account(session, principal)
         return CurrentAccountSummary(
             user_id=user.id,
             full_name=user.full_name,
@@ -86,15 +166,39 @@ def register_read_tools(
     )
     async def list_projects(
         status: ProjectStatus | None = None,
+        query: str | None = None,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        sort_by: Literal["id", "name", "status"] = "id",
+        sort_order: Literal["asc", "desc"] = "desc",
     ) -> ProjectListResult:
-        data = ProjectListInput(status=status)
-        principal = require_mcp_principal("projects:read")
-        async with sessions.session() as session:
-            items = await projects.list_projects_for_principal(
-                session, principal, status=data.status
+        async with structured_mcp_errors():
+            data = ProjectListInput(
+                status=status,
+                query=query,
+                limit=limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
+            principal = require_mcp_principal("projects:read")
+            async with sessions.session() as session:
+                items, total = await projects.list_projects_page_for_principal(
+                    session,
+                    principal,
+                    status=data.status,
+                    query=data.query,
+                    limit=data.limit,
+                    offset=data.offset,
+                    sort_by=data.sort_by,
+                    descending=data.sort_order == "desc",
+                )
         return ProjectListResult(
-            projects=[ProjectSummary.model_validate(item) for item in items]
+            projects=[ProjectSummary.model_validate(item) for item in items],
+            total=total,
+            limit=data.limit,
+            offset=data.offset,
+            has_more=data.offset + len(items) < total,
         )
 
     @server.tool(
@@ -108,12 +212,89 @@ def register_read_tools(
     async def get_project(
         project_id: Annotated[int, Field(gt=0, description="Stable project ID")],
     ) -> ProjectSummary:
-        principal = require_mcp_principal("projects:read")
-        async with sessions.session() as session:
-            project = await projects.get_project_for_principal(
-                session, principal, project_id
-            )
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("projects:read")
+            async with sessions.session() as session:
+                project = await projects.get_project_for_principal(
+                    session, principal, project_id
+                )
         return ProjectSummary.model_validate(project)
+
+    @server.tool(
+        description=(
+            "List active tasks in one project with tenant-safe filters, pagination, "
+            "and deterministic sorting."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def list_tasks(input: TaskListInput) -> TaskListResult:
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:read")
+            async with sessions.session() as session:
+                items, total = await tasks.list_tasks_page_for_principal(
+                    session,
+                    principal,
+                    input.project_id,
+                    status=input.status,
+                    priority=input.priority,
+                    assignee_id=input.assignee_id,
+                    query=input.query,
+                    limit=input.limit,
+                    offset=input.offset,
+                    sort_by=input.sort_by,
+                    descending=input.sort_order == "desc",
+                )
+        return TaskListResult(
+            tasks=[TaskSummary.model_validate(item) for item in items],
+            total=total,
+            limit=input.limit,
+            offset=input.offset,
+            has_more=input.offset + len(items) < total,
+        )
+
+    @server.tool(
+        description="Get one active task in a project by stable task ID.",
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def get_task(
+        project_id: Annotated[int, Field(gt=0)],
+        task_id: Annotated[int, Field(gt=0)],
+    ) -> TaskSummary:
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:read")
+            async with sessions.session() as session:
+                task = await tasks.get_task_for_principal(
+                    session, principal, project_id, task_id
+                )
+        return TaskSummary.model_validate(task)
+
+    @server.tool(
+        description=(
+            "List users in the connected business who may be assigned tasks. Use "
+            "the returned user_id for task assignment or reassignment."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def list_assignees() -> AssigneeListResult:
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:read")
+            async with sessions.session() as session:
+                assignees = await tasks.list_assignees_for_principal(
+                    session, principal
+                )
+        return AssigneeListResult(
+            assignees=[
+                AssigneeSummary(
+                    user_id=item.id,
+                    full_name=item.full_name,
+                    email=item.email,
+                )
+                for item in assignees
+            ]
+        )
 
 
 def register_write_tools(
@@ -131,14 +312,15 @@ def register_write_tools(
         structured_output=True,
     )
     async def create_project(input: CreateProjectInput) -> ProjectMutationResult:
-        principal = require_mcp_principal("projects:write")
-        async with sessions.session() as session:
-            result = await projects.create_project_for_principal(
-                session,
-                principal,
-                input.project_data(),
-                input.idempotency_key,
-            )
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("projects:write")
+            async with sessions.session() as session:
+                result = await projects.create_project_for_principal(
+                    session,
+                    principal,
+                    input.project_data(),
+                    input.idempotency_key,
+                )
         return ProjectMutationResult(
             project=ProjectSummary.model_validate(result.entity),
             replayed=result.replayed,
@@ -153,15 +335,35 @@ def register_write_tools(
         structured_output=True,
     )
     async def update_project(input: UpdateProjectInput) -> ProjectSummary:
-        principal = require_mcp_principal("projects:write")
-        async with sessions.session() as session:
-            project = await projects.update_project_for_principal(
-                session,
-                principal,
-                input.project_id,
-                input.project_data(),
-            )
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("projects:write")
+            async with sessions.session() as session:
+                project = await projects.update_project_for_principal(
+                    session,
+                    principal,
+                    input.project_id,
+                    input.project_data(),
+                )
         return ProjectSummary.model_validate(project)
+
+    @server.tool(
+        description=(
+            "Archive a project by soft deletion. Retrying the same project ID is "
+            "safe and returns replayed=true."
+        ),
+        annotations=IDEMPOTENT_DESTRUCTIVE_WRITE,
+        structured_output=True,
+    )
+    async def archive_project(input: ArchiveProjectInput) -> ArchiveProjectResult:
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("projects:write")
+            async with sessions.session() as session:
+                replayed = await projects.archive_project_for_principal(
+                    session, principal, input.project_id
+                )
+        return ArchiveProjectResult(
+            project_id=input.project_id, archived=True, replayed=replayed
+        )
 
     @server.tool(
         description=(
@@ -172,15 +374,16 @@ def register_write_tools(
         structured_output=True,
     )
     async def create_task(input: CreateTaskInput) -> TaskMutationResult:
-        principal = require_mcp_principal("tasks:write")
-        async with sessions.session() as session:
-            result = await tasks.create_task_for_principal(
-                session,
-                principal,
-                input.project_id,
-                input.task_data(),
-                input.idempotency_key,
-            )
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:write")
+            async with sessions.session() as session:
+                result = await tasks.create_task_for_principal(
+                    session,
+                    principal,
+                    input.project_id,
+                    input.task_data(),
+                    input.idempotency_key,
+                )
         return TaskMutationResult(
             task=TaskSummary.model_validate(result.entity),
             replayed=result.replayed,
@@ -195,15 +398,37 @@ def register_write_tools(
         structured_output=True,
     )
     async def update_task(input: UpdateTaskInput) -> TaskSummary:
-        principal = require_mcp_principal("tasks:write")
-        async with sessions.session() as session:
-            task = await tasks.update_task_for_principal(
-                session,
-                principal,
-                input.project_id,
-                input.task_id,
-                input.task_data(),
-            )
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:write")
+            async with sessions.session() as session:
+                task = await tasks.update_task_for_principal(
+                    session,
+                    principal,
+                    input.project_id,
+                    input.task_id,
+                    input.task_data(),
+                )
+        return TaskSummary.model_validate(task)
+
+    @server.tool(
+        description=(
+            "Assign or reassign one active task to a user returned by "
+            "list_assignees. The assignee must belong to the connected business."
+        ),
+        annotations=WRITE,
+        structured_output=True,
+    )
+    async def assign_task(input: AssignTaskInput) -> TaskSummary:
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:write")
+            async with sessions.session() as session:
+                task = await tasks.assign_task_for_principal(
+                    session,
+                    principal,
+                    input.project_id,
+                    input.task_id,
+                    input.assignee_id,
+                )
         return TaskSummary.model_validate(task)
 
     @server.tool(
@@ -211,13 +436,16 @@ def register_write_tools(
             "Archive one active task by soft deletion. This is destructive from the "
             "user's perspective and must only be used after explicit confirmation."
         ),
-        annotations=DESTRUCTIVE_WRITE,
+        annotations=IDEMPOTENT_DESTRUCTIVE_WRITE,
         structured_output=True,
     )
     async def archive_task(input: ArchiveTaskInput) -> ArchiveTaskResult:
-        principal = require_mcp_principal("tasks:write")
-        async with sessions.session() as session:
-            await tasks.archive_task_for_principal(
-                session, principal, input.project_id, input.task_id
-            )
-        return ArchiveTaskResult(task_id=input.task_id, archived=True)
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:write")
+            async with sessions.session() as session:
+                replayed = await tasks.archive_task_for_principal(
+                    session, principal, input.project_id, input.task_id
+                )
+        return ArchiveTaskResult(
+            task_id=input.task_id, archived=True, replayed=replayed
+        )

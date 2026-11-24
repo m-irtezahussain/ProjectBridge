@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core.managers.projects import ProjectManager, ProjectNotFoundError
-from app.core.managers.tasks import TaskManager
+from app.core.managers.tasks import AssigneeNotFoundError, TaskManager
 from app.core.services.mcp_auth import MCPPrincipal
 from app.core.services.mcp_mutations import (
     IdempotencyConflictError,
@@ -19,6 +19,7 @@ from app.models import (
     TaskPriority,
     TaskSource,
     TaskStatus,
+    User,
 )
 from app.repositories.mcp_operations import IdempotencyClaim
 from app.schemas import ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate
@@ -54,6 +55,14 @@ class FakeProjects:
             return None
         return project
 
+    async def get_for_business(
+        self, _session: object, business_id: int, project_id: int
+    ) -> Project | None:
+        project = self.items.get(project_id)
+        if project is None or project.business_id != business_id:
+            return None
+        return project
+
     def add(self, _session: object, project: Project) -> None:
         project.id = len(self.items) + 1
         self.items[project.id] = project
@@ -77,6 +86,18 @@ class FakeTasks:
             or task.project_id != project_id
             or task.is_deleted
         ):
+            return None
+        return task
+
+    async def get_for_project(
+        self,
+        _session: object,
+        business_id: int,
+        project_id: int,
+        task_id: int,
+    ) -> Task | None:
+        task = self.items.get(task_id)
+        if business_id != 11 or task is None or task.project_id != project_id:
             return None
         return task
 
@@ -160,6 +181,28 @@ class FakeAudit:
                 "outcome": outcome,
             }
         )
+
+
+class FakeUsers:
+    def __init__(self) -> None:
+        self.owner = User(
+            id=7,
+            full_name="Maya Chen",
+            email="maya@example.com",
+            password_hash="$argon2id$valid-test-password-hash",
+        )
+
+    async def get_business_assignee(
+        self, _session: object, business_id: int, user_id: int
+    ) -> User | None:
+        if business_id == 11 and user_id == self.owner.id:
+            return self.owner
+        return None
+
+    async def list_business_assignees(
+        self, _session: object, business_id: int
+    ) -> list[User]:
+        return [self.owner] if business_id == 11 else []
 
 
 def principal() -> MCPPrincipal:
@@ -265,6 +308,33 @@ async def test_project_update_is_tenant_scoped_and_audited() -> None:
     assert audit.events[-1]["outcome"] == "not_found"
 
 
+async def test_project_archive_is_idempotent_and_tenant_scoped() -> None:
+    projects = FakeProjects()
+    audit = FakeAudit()
+    manager = ProjectManager(
+        FakeAuth(),  # type: ignore[arg-type]
+        FakeBusinesses(),  # type: ignore[arg-type]
+        projects,  # type: ignore[arg-type]
+        FakeIdempotency(),  # type: ignore[arg-type]
+        audit,  # type: ignore[arg-type]
+    )
+    projects.items[1] = Project(
+        id=1,
+        name="Client Portal",
+        business_id=11,
+        status=ProjectStatus.ACTIVE,
+    )
+
+    first = await manager.archive_project_for_principal(AsyncMock(), principal(), 1)
+    retried = await manager.archive_project_for_principal(AsyncMock(), principal(), 1)
+
+    assert first is False
+    assert retried is True
+    assert projects.items[1].deleted_at is not None
+    assert [event["outcome"] for event in audit.events] == [
+        "success",
+        "idempotent_replay",
+    ]
 async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
     project = Project(
         id=3,
@@ -283,11 +353,13 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         tasks,  # type: ignore[arg-type]
         FakeIdempotency(),  # type: ignore[arg-type]
         audit,  # type: ignore[arg-type]
+        FakeUsers(),  # type: ignore[arg-type]
     )
     session = AsyncMock()
     data = TaskCreate(
         title="Prepare release",
         priority=TaskPriority.HIGH,
+        assignee_id=7,
     )
 
     created = await manager.create_task_for_principal(
@@ -303,19 +375,43 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         created.entity.id,
         TaskUpdate(status=TaskStatus.DONE),
     )
-    await manager.archive_task_for_principal(
+    assigned = await manager.assign_task_for_principal(
+        session,
+        principal(),
+        3,
+        created.entity.id,
+        7,
+    )
+    with pytest.raises(AssigneeNotFoundError):
+        await manager.assign_task_for_principal(
+            session,
+            principal(),
+            3,
+            created.entity.id,
+            99,
+        )
+    first_archive = await manager.archive_task_for_principal(
+        session, principal(), 3, created.entity.id
+    )
+    retried_archive = await manager.archive_task_for_principal(
         session, principal(), 3, created.entity.id
     )
 
     assert created.entity.created_by is TaskSource.MCP
+    assert created.entity.assignee_id == 7
     assert replayed.replayed is True
     assert len(tasks.items) == 1
     assert updated.status is TaskStatus.DONE
+    assert assigned.assignee_id == 7
     assert created.entity.is_deleted is True
+    assert first_archive is False
+    assert retried_archive is True
     assert [event["tool_name"] for event in audit.events] == [
         "create_task",
         "create_task",
         "update_task",
+        "assign_task",
+        "archive_task",
         "archive_task",
     ]
     assert [event["outcome"] for event in audit.events] == [
@@ -323,4 +419,6 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         "idempotent_replay",
         "success",
         "success",
+        "success",
+        "idempotent_replay",
     ]

@@ -5,6 +5,7 @@ description = "Shared FastAPI and MCP backend for ProjectBridge"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "aioboto3>=15,<16",
   "alembic>=1.17,<2",
   "asyncpg>=0.30,<1",
   "email-validator>=2.2,<3",

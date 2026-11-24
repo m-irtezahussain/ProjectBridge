@@ -8,8 +8,9 @@ from app.core.managers import AccountManager
 from app.core.services.mcp_auth import MCPAuthenticationService
 from app.core.services.mcp_oauth import MCPTokenService
 from app.core.services.status import status_service
-from app.deps import get_project_manager, get_task_manager
+from app.deps import get_document_manager, get_project_manager, get_task_manager
 from app.mcp.auth import MCPDatabaseSessions, ProjectBridgeTokenVerifier
+from app.mcp.document_tools import register_document_tools
 from app.mcp.tools import register_read_tools, register_write_tools
 from app.schemas.status import ServiceStatus
 
@@ -46,12 +47,19 @@ register_read_tools(
     mcp_sessions,
     AccountManager(),
     get_project_manager(),
+    get_task_manager(),
 )
 register_write_tools(
     mcp_server,
     mcp_sessions,
     get_project_manager(),
     get_task_manager(),
+)
+register_document_tools(
+    mcp_server,
+    mcp_sessions,
+    get_document_manager(),
+    settings.s3_presign_expiry_seconds,
 )
 
 

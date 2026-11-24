@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Path, Request, Response, status
 from app.api.routers.auth import ACCESS_COOKIE
 from app.core.managers.auth import AuthenticationError
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
-from app.core.managers.tasks import TaskNotFoundError
+from app.core.managers.tasks import AssigneeNotFoundError, TaskNotFoundError
 from app.deps import SessionDep, TaskManagerDep
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 
@@ -26,6 +26,10 @@ def _raise_http_error(error: ValueError) -> None:
     if isinstance(error, (ProjectNotFoundError, TaskNotFoundError)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from error
+    if isinstance(error, AssigneeNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from error
     raise error
 
@@ -58,7 +62,12 @@ async def create_task(
         task = await manager.create_task(
             session, request.cookies.get(ACCESS_COOKIE), project_id, data
         )
-    except (AuthenticationError, BusinessRequiredError, ProjectNotFoundError) as error:
+    except (
+        AuthenticationError,
+        BusinessRequiredError,
+        ProjectNotFoundError,
+        AssigneeNotFoundError,
+    ) as error:
         _raise_http_error(error)
     return TaskRead.model_validate(task)
 
@@ -105,6 +114,7 @@ async def update_task(
         AuthenticationError,
         BusinessRequiredError,
         TaskNotFoundError,
+        AssigneeNotFoundError,
     ) as error:
         _raise_http_error(error)
     return TaskRead.model_validate(task)

@@ -82,6 +82,30 @@ class ProjectManager:
             session, principal.business_id, status=status
         )
 
+    async def list_projects_page_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        *,
+        status: ProjectStatus | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+        sort_by: str,
+        descending: bool,
+    ) -> tuple[list[Project], int]:
+        await self._require_principal_business(session, principal)
+        return await self._projects.list_active_page(
+            session,
+            principal.business_id,
+            status=status,
+            query=query,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            descending=descending,
+        )
+
     async def get_project_for_principal(
         self,
         session: AsyncSession,
@@ -234,6 +258,42 @@ class ProjectManager:
         )
         await session.commit()
         return project
+
+    async def archive_project_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+    ) -> bool:
+        """Archive a project, returning True when the request is a safe replay."""
+        await self._require_principal_business(session, principal)
+        project = await self._projects.get_for_business(
+            session, principal.business_id, project_id
+        )
+        if project is None:
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name="archive_project",
+                target_type="project",
+                target_id=project_id,
+                outcome="not_found",
+            )
+            await session.commit()
+            raise ProjectNotFoundError("Project not found")
+        replayed = project.deleted_at is not None
+        if not replayed:
+            project.deleted_at = datetime.now(UTC)
+        self._audit.add(
+            session,
+            principal=principal,
+            tool_name="archive_project",
+            target_type="project",
+            target_id=project.id,
+            outcome="idempotent_replay" if replayed else "success",
+        )
+        await session.commit()
+        return replayed
 
     @staticmethod
     def _project_from_snapshot(

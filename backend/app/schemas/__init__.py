@@ -2,6 +2,18 @@
 
 from app.schemas.auth import LoginRequest, NavigationResponse, SessionResponse
 from app.schemas.business import BusinessCreate, BusinessRead
+from app.schemas.document import (
+    ArchiveDocumentResult,
+    DocumentDownloadResult,
+    DocumentListInput,
+    DocumentListResult,
+    DocumentSummary,
+    FinalizeDocumentUploadInput,
+    FinalizeDocumentUploadResult,
+    InitiateDocumentUploadInput,
+    InitiateDocumentUploadResult,
+    UploadTarget,
+)
 from app.schemas.oauth import (
     OAuthClientRegistrationRequest,
     OAuthClientRegistrationResponse,
@@ -14,8 +26,17 @@ from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 from app.schemas.user import UserCreate, UserRead
 
 __all__ = [
+    "ArchiveDocumentResult",
     "BusinessCreate",
     "BusinessRead",
+    "DocumentDownloadResult",
+    "DocumentListInput",
+    "DocumentListResult",
+    "DocumentSummary",
+    "FinalizeDocumentUploadInput",
+    "FinalizeDocumentUploadResult",
+    "InitiateDocumentUploadInput",
+    "InitiateDocumentUploadResult",
     "LoginRequest",
     "NavigationResponse",
     "OAuthClientRegistrationRequest",
@@ -30,6 +51,7 @@ __all__ = [
     "TaskCreate",
     "TaskRead",
     "TaskUpdate",
+    "UploadTarget",
     "UserCreate",
     "UserRead",
 ]

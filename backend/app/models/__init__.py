@@ -3,6 +3,7 @@
 from app.models.auth_rate_limit import AuthRateLimit
 from app.models.base import Base
 from app.models.business import Business
+from app.models.document import Document, DocumentAuditEvent, DocumentStatus
 from app.models.mcp_operations import MCPAuditEvent, MCPIdempotencyRecord
 from app.models.oauth import (
     OAuthAuthorizationCode,
@@ -19,6 +20,9 @@ __all__ = [
     "AuthRateLimit",
     "Base",
     "Business",
+    "Document",
+    "DocumentAuditEvent",
+    "DocumentStatus",
     "MCPAuditEvent",
     "MCPIdempotencyRecord",
     "OAuthAuthorizationCode",

@@ -5,7 +5,19 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.core.managers import AuthManager, OAuthManager, ProjectManager, TaskManager
+from app.core.managers import (
+    AuthManager,
+    DocumentManager,
+    OAuthManager,
+    ProjectManager,
+    TaskManager,
+)
+from app.core.services.document_storage import (
+    DocumentStorage,
+    DocumentStorageError,
+    S3DocumentStorage,
+    UnavailableDocumentStorage,
+)
 from app.core.services.mcp_oauth import MCPTokenService
 from app.core.services.rate_limits import AuthRateLimiter
 from app.core.services.refresh_tokens import RefreshTokenService
@@ -47,6 +59,20 @@ def get_task_manager() -> TaskManager:
 
 
 TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
+
+
+@lru_cache
+def get_document_manager() -> DocumentManager:
+    settings = get_settings()
+    storage: DocumentStorage
+    try:
+        storage = S3DocumentStorage(settings)
+    except DocumentStorageError:
+        storage = UnavailableDocumentStorage()
+    return DocumentManager(settings, storage)
+
+
+DocumentManagerDep = Annotated[DocumentManager, Depends(get_document_manager)]
 
 
 @lru_cache

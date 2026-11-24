@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.project import ProjectStatus
@@ -21,6 +23,21 @@ class ProjectListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: ProjectStatus | None = None
+    query: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    sort_by: Literal["id", "name", "status"] = "id"
+    sort_order: Literal["asc", "desc"] = "desc"
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("query must not be blank")
+        return normalized
 
 
 class ProjectSummary(BaseModel):
@@ -36,6 +53,10 @@ class ProjectListResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     projects: list[ProjectSummary]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
 
 
 class CreateProjectInput(ProjectCreate):
@@ -82,6 +103,20 @@ class ProjectMutationResult(BaseModel):
     replayed: bool
 
 
+class ArchiveProjectInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: int = Field(gt=0)
+
+
+class ArchiveProjectResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: int
+    archived: bool
+    replayed: bool
+
+
 class CreateTaskInput(TaskCreate):
     project_id: int = Field(gt=0)
     idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
@@ -99,6 +134,14 @@ class CreateTaskInput(TaskCreate):
         )
 
 
+class AssignTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: int = Field(gt=0)
+    task_id: int = Field(gt=0)
+    assignee_id: int = Field(gt=0)
+
+
 class UpdateTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -108,6 +151,7 @@ class UpdateTaskInput(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
+    assignee_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def require_update(self) -> "UpdateTaskInput":
@@ -137,7 +181,56 @@ class TaskSummary(BaseModel):
     description: str | None
     status: TaskStatus
     priority: TaskPriority
+    assignee_id: int | None
     project_id: int
+
+
+class TaskListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: int = Field(gt=0)
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    assignee_id: int | None = Field(default=None, gt=0)
+    query: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    sort_by: Literal["id", "title", "status", "priority"] = "id"
+    sort_order: Literal["asc", "desc"] = "desc"
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("query must not be blank")
+        return normalized
+
+
+class TaskListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tasks: list[TaskSummary]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
+class AssigneeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: int
+    full_name: str
+    email: str
+
+
+class AssigneeListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assignees: list[AssigneeSummary]
 
 
 class TaskMutationResult(BaseModel):
@@ -152,3 +245,18 @@ class ArchiveTaskResult(BaseModel):
 
     task_id: int
     archived: bool
+    replayed: bool
+
+
+class MCPErrorDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Literal[
+        "validation_error",
+        "authentication_error",
+        "authorization_error",
+        "not_found",
+        "conflict",
+    ]
+    message: str
+    retryable: bool = False

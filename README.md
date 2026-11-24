@@ -29,12 +29,31 @@ Then open:
 - MCP Streamable HTTP: `http://localhost:8000/mcp/`
 
 The MCP server exposes authenticated account, project, and task tools. Read tools include
-`get_current_account`, `list_projects`, and `get_project`; write tools include project creation
-and updates plus task creation, updates, and soft archival. The HTTP MCP endpoint requires a
+`get_current_account`, paginated/filterable project and task lookup, and assignee discovery;
+write tools include project creation, updates, and archival plus task creation, assignment,
+reassignment, updates, and retry-safe archival. The HTTP MCP endpoint requires a
 ProjectBridge MCP OAuth access token and resolves its user, active grant, scopes, and owned
 business before accepting a request. Retryable creates require an idempotency key and every MCP
-write records an audit outcome. `get_service_status` uses the same `StatusService` as the REST
+write records an audit outcome. Expected MCP failures use stable JSON error codes for validation,
+authorization, conflicts, and missing records. `get_service_status` uses the same `StatusService` as the REST
 liveness route to demonstrate the one-core/two-interface architecture.
+
+Document ingestion uses a quarantine-first direct upload flow for private S3-compatible
+storage such as MinIO by Silo. Configure `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`,
+`S3_SECRET_ACCESS_KEY`, and `S3_BUCKET`; optional region, path-style, presign expiry, file-size,
+page-count, decompression, and image-dimension limits are shown in `.env.example`. The bucket
+must block public access. Browser clients need bucket CORS limited to the web app origin and
+`POST`/`GET` as required. Production configuration requires HTTPS storage and explicit
+credentials. Enable MinIO versioning or Object Lock when infrastructure-enforced WORM retention
+is required in addition to ProjectBridge's content-addressed, never-overwrite application policy.
+
+`initiate_document_upload` returns a five-minute presigned POST constrained to the declared
+PDF, PNG, or JPEG size and MIME type. After upload, `finalize_document_upload` streams the
+object through size, magic-byte, structural, page, decompression, and pixel checks; hashes the
+original bytes; and promotes them to a tenant-separated `raw/sha256` key. Raw objects are never
+modified or deleted by document archival. Duplicate content shares the immutable object while
+retaining separate document metadata and audit history. Failed and unfinalized quarantine
+objects are never downloadable.
 
 Stop containers while retaining the PostgreSQL volume:
 

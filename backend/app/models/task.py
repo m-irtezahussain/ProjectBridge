@@ -12,6 +12,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.project import Project
+    from app.models.user import User
 
 
 class TaskStatus(StrEnum):
@@ -73,6 +74,9 @@ class Task(Base):
     project_id: Mapped[int] = mapped_column(
         ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    assignee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
@@ -89,6 +93,7 @@ class Task(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="tasks", lazy="raise")
+    assignee: Mapped[User | None] = relationship(lazy="raise")
 
     @validates("title")
     def validate_title(self, _key: str, value: str) -> str:
