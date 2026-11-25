@@ -11,6 +11,8 @@ from app.core.validation import normalize_name, normalize_task_description
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.document import Document
+    from app.models.ingestion import TaskCandidate
     from app.models.project import Project
     from app.models.user import User
 
@@ -31,7 +33,9 @@ class TaskPriority(StrEnum):
 
 class TaskSource(StrEnum):
     API = "api"
+    REST = "rest"
     MCP = "mcp"
+    WORKER = "worker"
 
 
 class Task(Base):
@@ -77,6 +81,14 @@ class Task(Base):
     assignee_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    source_document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    source_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("document_task_candidates.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
@@ -94,6 +106,10 @@ class Task(Base):
 
     project: Mapped[Project] = relationship(back_populates="tasks", lazy="raise")
     assignee: Mapped[User | None] = relationship(lazy="raise")
+    source_document: Mapped[Document | None] = relationship(
+        back_populates="source_tasks", lazy="raise"
+    )
+    source_candidate: Mapped[TaskCandidate | None] = relationship(lazy="raise")
 
     @validates("title")
     def validate_title(self, _key: str, value: str) -> str:

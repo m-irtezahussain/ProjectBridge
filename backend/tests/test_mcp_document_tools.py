@@ -9,7 +9,7 @@ from mcp.server import MCPServer
 from app.core.services.document_storage import PresignedPost
 from app.core.services.mcp_auth import MCPPrincipal
 from app.mcp.document_tools import register_document_tools
-from app.models import Document, DocumentStatus
+from app.models import ActionOrigin, Document, DocumentStatus
 from app.schemas.document import InitiateDocumentUploadInput
 
 
@@ -27,6 +27,7 @@ class FakeDocuments:
             business_id=11,
             project_id=3,
             uploaded_by_user_id=7,
+            created_via=ActionOrigin.MCP,
             original_filename="report.pdf",
             declared_mime_type="application/pdf",
             detected_mime_type=None,

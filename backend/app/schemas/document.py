@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.document import DocumentStatus
+from app.models.provenance import ActionOrigin
 
 SupportedDocumentMime = Literal["application/pdf", "image/jpeg", "image/png"]
 
@@ -37,6 +38,7 @@ class DocumentSummary(BaseModel):
 
     id: int
     project_id: int | None
+    created_via: ActionOrigin
     original_filename: str
     status: DocumentStatus
     declared_mime_type: str

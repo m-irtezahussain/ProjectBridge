@@ -8,6 +8,7 @@ from app.config import Settings, get_settings
 from app.core.managers import (
     AuthManager,
     DocumentManager,
+    IngestionManager,
     OAuthManager,
     ProjectManager,
     TaskManager,
@@ -19,6 +20,7 @@ from app.core.services.document_storage import (
     UnavailableDocumentStorage,
 )
 from app.core.services.mcp_oauth import MCPTokenService
+from app.core.services.ocr import PaddleOCRProvider
 from app.core.services.rate_limits import AuthRateLimiter
 from app.core.services.refresh_tokens import RefreshTokenService
 from app.core.services.tokens import TokenService
@@ -62,17 +64,30 @@ TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
 
 
 @lru_cache
-def get_document_manager() -> DocumentManager:
+def get_document_storage() -> DocumentStorage:
     settings = get_settings()
-    storage: DocumentStorage
     try:
-        storage = S3DocumentStorage(settings)
+        return S3DocumentStorage(settings)
     except DocumentStorageError:
-        storage = UnavailableDocumentStorage()
-    return DocumentManager(settings, storage)
+        return UnavailableDocumentStorage()
+
+
+@lru_cache
+def get_document_manager() -> DocumentManager:
+    return DocumentManager(get_settings(), get_document_storage())
 
 
 DocumentManagerDep = Annotated[DocumentManager, Depends(get_document_manager)]
+
+
+@lru_cache
+def get_ingestion_manager() -> IngestionManager:
+    settings = get_settings()
+    return IngestionManager(
+        settings,
+        get_document_storage(),
+        PaddleOCRProvider(settings.ocr_model, settings.ocr_language),
+    )
 
 
 @lru_cache

@@ -7,10 +7,10 @@ interfaces over one backend core:
 - a FastAPI REST API and MCP Streamable HTTP server;
 - PostgreSQL through async SQLAlchemy and Alembic.
 
-This repository currently provides the runnable foundation. Domain features such as
-authentication, businesses, projects, tasks, immutable document ingestion, OCR, and
-tenant-separated RAG should be added vertically through the existing schemas,
-repositories, services/managers, REST routers, and MCP tools.
+The backend implements authentication, businesses, projects, tasks, immutable document
+upload, and a controlled OCR ingestion workflow through shared managers and services.
+Tenant-separated semantic RAG remains a later extension; ingestion currently creates a
+tenant-scoped PostgreSQL full-text index.
 
 ## Start the stack
 
@@ -38,6 +38,11 @@ write records an audit outcome. Expected MCP failures use stable JSON error code
 authorization, conflicts, and missing records. `get_service_status` uses the same `StatusService` as the REST
 liveness route to demonstrate the one-core/two-interface architecture.
 
+`get_task_source_reference` returns compact provenance for source-backed tasks: document
+and ingestion IDs, the immutable content hash, a bounded source excerpt, page/line
+coordinates, extractor and OCR versions, and initiation/execution origins. It never returns
+raw document bytes or complete OCR text and requires both `tasks:read` and `documents:read`.
+
 Document ingestion uses a quarantine-first direct upload flow for private S3-compatible
 storage such as MinIO by Silo. Configure `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`,
 `S3_SECRET_ACCESS_KEY`, and `S3_BUCKET`; optional region, path-style, presign expiry, file-size,
@@ -54,6 +59,31 @@ original bytes; and promotes them to a tenant-separated `raw/sha256` key. Raw ob
 modified or deleted by document archival. Duplicate content shares the immutable object while
 retaining separate document metadata and audit history. Failed and unfinalized quarantine
 objects are never downloadable.
+
+Finalized documents can be queued with `start_document_ingestion`. A separate
+`ocr-worker` service downloads the immutable raw object to a temporary file and runs
+PP-OCRv6 Small outside the API event loop. The worker stores OCR text separately, extracts
+only explicitly marked `TODO:`, `TASK:`, and `ACTION:` lines as candidates, and pauses at
+`awaiting_confirmation`. No task is created until a caller with both `documents:write` and
+`tasks:write` confirms or rejects every candidate with `confirm_task_candidates`.
+
+OCR and document text are always untrusted data. Their contents are never interpreted as
+permissions or tool instructions, and candidate extraction itself cannot call tools.
+Created tasks retain both source-document and source-candidate IDs. After confirmation,
+the worker indexes the OCR text and confirmed task titles in a business-scoped full-text
+index. `get_document_ingestion` and `list_task_candidates` expose progress; failed stages
+record a durable checkpoint and use bounded exponential retries. Exhausted or partial runs
+can be resumed with `retry_document_ingestion` without duplicating OCR text, candidates,
+or tasks.
+
+The OCR dependencies live in the `ocr` optional dependency group and only the worker image
+installs them. PaddleOCR downloads the configured official model files on first use, so the
+worker needs outbound access during initial model provisioning. Set `OCR_MODEL`,
+`OCR_LANGUAGE`, `OCR_WORKER_CONCURRENCY`, `OCR_LEASE_SECONDS`, and `OCR_MAX_ATTEMPTS` as
+needed; their defaults are documented in `.env.example`. The worker defaults to
+`linux/amd64` because PaddlePaddle does not publish a Linux ARM64 wheel; Docker Desktop can
+emulate it on Apple Silicon, and `OCR_WORKER_PLATFORM` remains overridable for supported
+deployment targets.
 
 Stop containers while retaining the PostgreSQL volume:
 

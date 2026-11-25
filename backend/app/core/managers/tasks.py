@@ -16,7 +16,7 @@ from app.repositories.mcp_operations import (
     MCPIdempotencyRepository,
 )
 from app.repositories.projects import ProjectRepository
-from app.repositories.tasks import TaskRepository
+from app.repositories.tasks import TaskRepository, TaskSourceReferenceRecord
 from app.repositories.users import UserRepository
 from app.schemas.task import TaskCreate, TaskUpdate
 
@@ -99,7 +99,7 @@ class TaskManager:
         access_token: str | None,
         project_id: int,
         data: TaskCreate,
-        source: TaskSource = TaskSource.API,
+        source: TaskSource = TaskSource.REST,
     ) -> Task:
         business = await self._get_business(session, access_token)
         await self._require_project(session, business.id, project_id)
@@ -231,6 +231,21 @@ class TaskManager:
         if task is None:
             raise TaskNotFoundError("Task not found")
         return task
+
+    async def get_source_reference_for_principal(
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        project_id: int,
+        task_id: int,
+    ) -> TaskSourceReferenceRecord:
+        await self._require_principal_business(session, principal)
+        reference = await self._tasks.get_source_reference(
+            session, principal.business_id, project_id, task_id
+        )
+        if reference is None:
+            raise TaskNotFoundError("Task not found")
+        return reference
 
     async def create_task_for_principal(
         self,

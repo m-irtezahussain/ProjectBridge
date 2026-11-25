@@ -17,6 +17,7 @@ async def test_status_tool_contract() -> None:
         "get_project",
         "list_tasks",
         "get_task",
+        "get_task_source_reference",
         "list_assignees",
         "create_project",
         "update_project",
@@ -31,6 +32,11 @@ async def test_status_tool_contract() -> None:
         "get_document",
         "get_document_download_url",
         "archive_document",
+        "start_document_ingestion",
+        "get_document_ingestion",
+        "list_task_candidates",
+        "confirm_task_candidates",
+        "retry_document_ingestion",
     ]
     tools = {tool.name: tool for tool in listed.tools}
     read_tools = {name: tools[name] for name in (
@@ -39,10 +45,13 @@ async def test_status_tool_contract() -> None:
         "get_project",
         "list_tasks",
         "get_task",
+        "get_task_source_reference",
         "list_assignees",
         "list_documents",
         "get_document",
         "get_document_download_url",
+        "get_document_ingestion",
+        "list_task_candidates",
     )}
     assert all(tool.annotations.read_only_hint is True for tool in read_tools.values())
     assert all(
@@ -55,6 +64,8 @@ async def test_status_tool_contract() -> None:
     assert tools["archive_project"].annotations.idempotent_hint is True
     assert tools["archive_document"].annotations.idempotent_hint is True
     assert tools["finalize_document_upload"].annotations.idempotent_hint is True
+    assert tools["start_document_ingestion"].annotations.idempotent_hint is True
+    assert tools["retry_document_ingestion"].annotations.idempotent_hint is True
     assert result.is_error is False
     assert result.structured_content == {
         "service": "projectbridge",

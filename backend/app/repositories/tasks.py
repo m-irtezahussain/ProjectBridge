@@ -1,7 +1,27 @@
-from sqlalchemy import func, select
+from dataclasses import dataclass
+
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, Task, TaskPriority, TaskStatus
+from app.models import (
+    Document,
+    DocumentText,
+    IngestionRun,
+    Project,
+    Task,
+    TaskCandidate,
+    TaskPriority,
+    TaskStatus,
+)
+
+
+@dataclass(frozen=True)
+class TaskSourceReferenceRecord:
+    task: Task
+    document: Document | None
+    candidate: TaskCandidate | None
+    document_text: DocumentText | None
+    ingestion_run: IngestionRun | None
 
 
 class TaskRepository:
@@ -119,3 +139,61 @@ class TaskRepository:
 
     def add(self, session: AsyncSession, task: Task) -> None:
         session.add(task)
+
+    async def get_source_reference(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        project_id: int,
+        task_id: int,
+    ) -> TaskSourceReferenceRecord | None:
+        row = (
+            await session.execute(
+                select(Task, Document, TaskCandidate, DocumentText, IngestionRun)
+                .join(Project, Task.project_id == Project.id)
+                .outerjoin(
+                    Document,
+                    and_(
+                        Task.source_document_id == Document.id,
+                        Document.business_id == business_id,
+                    ),
+                )
+                .outerjoin(
+                    TaskCandidate,
+                    and_(
+                        Task.source_candidate_id == TaskCandidate.id,
+                        TaskCandidate.business_id == business_id,
+                    ),
+                )
+                .outerjoin(
+                    DocumentText,
+                    and_(
+                        TaskCandidate.source_text_id == DocumentText.id,
+                        DocumentText.business_id == business_id,
+                    ),
+                )
+                .outerjoin(
+                    IngestionRun,
+                    and_(
+                        TaskCandidate.ingestion_run_id == IngestionRun.id,
+                        IngestionRun.business_id == business_id,
+                    ),
+                )
+                .where(
+                    Task.id == task_id,
+                    Task.project_id == project_id,
+                    Task.is_deleted.is_(False),
+                    Project.business_id == business_id,
+                    Project.deleted_at.is_(None),
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return TaskSourceReferenceRecord(
+            task=row[0],
+            document=row[1],
+            candidate=row[2],
+            document_text=row[3],
+            ingestion_run=row[4],
+        )

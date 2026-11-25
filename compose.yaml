@@ -31,6 +31,12 @@ x-backend-environment: &backend-environment
   DOCUMENT_MAX_IMAGE_PIXELS: ${DOCUMENT_MAX_IMAGE_PIXELS:-40000000}
   DOCUMENT_MAX_IMAGE_DIMENSION: ${DOCUMENT_MAX_IMAGE_DIMENSION:-20000}
   DOCUMENT_MAX_DECOMPRESSED_BYTES: ${DOCUMENT_MAX_DECOMPRESSED_BYTES:-209715200}
+  OCR_MODEL: ${OCR_MODEL:-PP-OCRv6_small}
+  OCR_LANGUAGE: ${OCR_LANGUAGE:-en}
+  OCR_WORKER_CONCURRENCY: ${OCR_WORKER_CONCURRENCY:-1}
+  OCR_POLL_SECONDS: ${OCR_POLL_SECONDS:-2}
+  OCR_LEASE_SECONDS: ${OCR_LEASE_SECONDS:-600}
+  OCR_MAX_ATTEMPTS: ${OCR_MAX_ATTEMPTS:-5}
 
 services:
   db:
@@ -99,6 +105,21 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+
+  ocr-worker:
+    platform: ${OCR_WORKER_PLATFORM:-linux/amd64}
+    build:
+      context: ./backend
+      target: ocr-worker
+    environment: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 10m
 
   frontend:
     build:

@@ -13,6 +13,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.business import Business
+    from app.models.document import Document
     from app.models.task import Task
 
 
@@ -58,6 +59,9 @@ class Project(Base):
 
     business: Mapped[Business] = relationship(back_populates="projects", lazy="raise")
     tasks: Mapped[list[Task]] = relationship(back_populates="project", lazy="raise")
+    documents: Mapped[list[Document]] = relationship(
+        back_populates="project", lazy="raise"
+    )
 
     @validates("name")
     def validate_name(self, _key: str, value: str) -> str:

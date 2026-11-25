@@ -142,6 +142,20 @@ class Settings(BaseSettings):
         le=500 * 1024 * 1024,
         validation_alias="DOCUMENT_MAX_DECOMPRESSED_BYTES",
     )
+    ocr_model: str = Field(default="PP-OCRv6_small", validation_alias="OCR_MODEL")
+    ocr_language: str = Field(default="en", validation_alias="OCR_LANGUAGE")
+    ocr_worker_concurrency: int = Field(
+        default=1, ge=1, le=4, validation_alias="OCR_WORKER_CONCURRENCY"
+    )
+    ocr_poll_seconds: float = Field(
+        default=2.0, ge=0.25, le=30, validation_alias="OCR_POLL_SECONDS"
+    )
+    ocr_lease_seconds: int = Field(
+        default=600, ge=60, le=3600, validation_alias="OCR_LEASE_SECONDS"
+    )
+    ocr_max_attempts: int = Field(
+        default=5, ge=1, le=10, validation_alias="OCR_MAX_ATTEMPTS"
+    )
 
     @field_validator(
         "s3_endpoint_url",

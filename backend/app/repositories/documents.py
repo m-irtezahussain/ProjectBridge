@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, DocumentAuditEvent, DocumentStatus
+from app.models import ActionOrigin, Document, DocumentAuditEvent, DocumentStatus
 
 
 class DocumentRepository:
@@ -86,6 +86,7 @@ class DocumentAuditRepository:
         actor_user_id: int,
         action: str,
         outcome: str,
+        actor_origin: ActionOrigin = ActionOrigin.MCP,
         details: dict[str, object] | None = None,
     ) -> None:
         session.add(
@@ -93,6 +94,7 @@ class DocumentAuditRepository:
                 document_id=document.id,
                 business_id=document.business_id,
                 actor_user_id=actor_user_id,
+                actor_origin=actor_origin,
                 action=action,
                 outcome=outcome,
                 details=details,

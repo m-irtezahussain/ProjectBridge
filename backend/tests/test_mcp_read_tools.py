@@ -1,6 +1,7 @@
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from mcp import Client
@@ -15,6 +16,7 @@ from app.models import (
     ProjectStatus,
     Task,
     TaskPriority,
+    TaskSource,
     TaskStatus,
     User,
 )
@@ -97,6 +99,42 @@ class FakeTasks:
     async def get_task_for_principal(self, *_args: object) -> Task:
         return self.task
 
+    async def get_source_reference_for_principal(
+        self, *_args: object
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            task=SimpleNamespace(id=8, project_id=3, created_by=TaskSource.WORKER),
+            document=SimpleNamespace(
+                id=5,
+                project_id=3,
+                original_filename="launch.png",
+                content_sha256="a" * 64,
+            ),
+            candidate=SimpleNamespace(
+                id=12,
+                source_excerpt="TODO: Prepare release",
+                page_number=1,
+                source_line_start=4,
+                source_line_end=4,
+                extractor="safe_marker_extractor",
+                extractor_version="1.0",
+                extracted_via="worker",
+            ),
+            document_text=SimpleNamespace(
+                status=SimpleNamespace(value="completed"),
+                engine="paddleocr",
+                engine_version="3.7.0",
+                model="PP-OCRv6_small",
+                language="en",
+            ),
+            ingestion_run=SimpleNamespace(
+                id=9,
+                requested_by_user_id=7,
+                initiated_via="mcp",
+                ocr_status=SimpleNamespace(value="completed"),
+            ),
+        )
+
     async def list_assignees_for_principal(self, *_args: object) -> list[User]:
         return [self.assignee]
 
@@ -116,7 +154,7 @@ async def test_read_tools_return_compact_typed_results(
     principal = MCPPrincipal(
         user_id=7,
         business_id=11,
-        scopes=frozenset({"projects:read", "tasks:read"}),
+        scopes=frozenset({"projects:read", "tasks:read", "documents:read"}),
         grant_id="grant-id",
     )
     monkeypatch.setattr("app.mcp.tools.require_mcp_principal", lambda *_: principal)
@@ -129,6 +167,9 @@ async def test_read_tools_return_compact_typed_results(
         task = await client.call_tool(
             "get_task", {"project_id": 3, "task_id": 8}
         )
+        source = await client.call_tool(
+            "get_task_source_reference", {"project_id": 3, "task_id": 8}
+        )
         assignees = await client.call_tool("list_assignees", {})
 
     assert account.is_error is False
@@ -138,7 +179,7 @@ async def test_read_tools_return_compact_typed_results(
         "email": "maya@example.com",
         "business_id": 11,
         "business_name": "Acme Studio",
-        "scopes": ["projects:read", "tasks:read"],
+        "scopes": ["documents:read", "projects:read", "tasks:read"],
     }
     assert listed.structured_content == {
         "projects": [
@@ -164,6 +205,8 @@ async def test_read_tools_return_compact_typed_results(
                 "status": "todo",
                 "priority": "high",
                 "assignee_id": 7,
+                "source_document_id": None,
+                "source_candidate_id": None,
                 "project_id": 3,
             }
         ],
@@ -173,6 +216,33 @@ async def test_read_tools_return_compact_typed_results(
         "has_more": False,
     }
     assert task.structured_content == tasks.structured_content["tasks"][0]
+    assert source.structured_content == {
+        "task_id": 8,
+        "project_id": 3,
+        "task_created_via": "worker",
+        "has_document_source": True,
+        "document_id": 5,
+        "document_project_id": 3,
+        "original_filename": "launch.png",
+        "content_sha256": "a" * 64,
+        "candidate_id": 12,
+        "ingestion_run_id": 9,
+        "source_excerpt": "TODO: Prepare release",
+        "page_number": 1,
+        "source_line_start": 4,
+        "source_line_end": 4,
+        "extractor": "safe_marker_extractor",
+        "extractor_version": "1.0",
+        "extracted_via": "worker",
+        "ocr_status": "completed",
+        "ocr_engine": "paddleocr",
+        "ocr_engine_version": "3.7.0",
+        "ocr_model": "PP-OCRv6_small",
+        "ocr_language": "en",
+        "ingestion_initiated_by_user_id": 7,
+        "ingestion_initiated_via": "mcp",
+    }
+    assert "text" not in source.structured_content
     assert assignees.structured_content == {
         "assignees": [
             {"user_id": 7, "full_name": "Maya Chen", "email": "maya@example.com"}

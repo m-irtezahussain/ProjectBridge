@@ -137,6 +137,8 @@ def test_task_table_contains_project_state_and_source_columns() -> None:
         "priority",
         "project_id",
         "assignee_id",
+        "source_document_id",
+        "source_candidate_id",
         "is_deleted",
         "created_by",
     }

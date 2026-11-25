@@ -27,6 +27,7 @@ async def main() -> None:
         "get_project",
         "list_tasks",
         "get_task",
+        "get_task_source_reference",
         "list_assignees",
         "create_project",
         "update_project",
@@ -41,6 +42,11 @@ async def main() -> None:
         "get_document",
         "get_document_download_url",
         "archive_document",
+        "start_document_ingestion",
+        "get_document_ingestion",
+        "list_task_candidates",
+        "confirm_task_candidates",
+        "retry_document_ingestion",
     ]
     assert result.is_error is False
     print(json.dumps(result.structured_content, sort_keys=True))

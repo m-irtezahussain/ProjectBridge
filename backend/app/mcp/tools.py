@@ -14,6 +14,7 @@ from app.core.managers.documents import (
     DocumentNotFoundError,
     DocumentStateConflictError,
 )
+from app.core.managers.ingestion import IngestionConflictError, IngestionNotFoundError
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
 from app.core.managers.tasks import AssigneeNotFoundError, TaskNotFoundError
 from app.core.services.document_storage import DocumentStorageError
@@ -44,6 +45,7 @@ from app.schemas.mcp_tools import (
     TaskListInput,
     TaskListResult,
     TaskMutationResult,
+    TaskSourceReference,
     TaskSummary,
     UpdateProjectInput,
     UpdateTaskInput,
@@ -104,6 +106,7 @@ async def structured_mcp_errors() -> AsyncIterator[None]:
     except (
         AccountNotFoundError,
         DocumentNotFoundError,
+        IngestionNotFoundError,
         ProjectNotFoundError,
         TaskNotFoundError,
     ) as error:
@@ -115,7 +118,7 @@ async def structured_mcp_errors() -> AsyncIterator[None]:
     except (IdempotencyConflictError, IdempotencyInProgressError) as error:
         detail = MCPErrorDetail(code="conflict", message=str(error))
         raise ToolError(detail.model_dump_json()) from error
-    except DocumentStateConflictError as error:
+    except (DocumentStateConflictError, IngestionConflictError) as error:
         detail = MCPErrorDetail(code="conflict", message=str(error))
         raise ToolError(detail.model_dump_json()) from error
     except DocumentStorageError as error:
@@ -269,6 +272,55 @@ def register_read_tools(
                     session, principal, project_id, task_id
                 )
         return TaskSummary.model_validate(task)
+
+    @server.tool(
+        description=(
+            "Get compact document and OCR provenance for a task without returning "
+            "the raw file or complete extracted document text."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def get_task_source_reference(
+        project_id: Annotated[int, Field(gt=0)],
+        task_id: Annotated[int, Field(gt=0)],
+    ) -> TaskSourceReference:
+        async with structured_mcp_errors():
+            principal = require_mcp_principal("tasks:read", "documents:read")
+            async with sessions.session() as session:
+                reference = await tasks.get_source_reference_for_principal(
+                    session, principal, project_id, task_id
+                )
+        document = reference.document
+        candidate = reference.candidate
+        text = reference.document_text
+        run = reference.ingestion_run
+        return TaskSourceReference(
+            task_id=reference.task.id,
+            project_id=reference.task.project_id,
+            task_created_via=reference.task.created_by,
+            has_document_source=document is not None,
+            document_id=document.id if document else None,
+            document_project_id=document.project_id if document else None,
+            original_filename=document.original_filename if document else None,
+            content_sha256=document.content_sha256 if document else None,
+            candidate_id=candidate.id if candidate else None,
+            ingestion_run_id=run.id if run else None,
+            source_excerpt=candidate.source_excerpt if candidate else None,
+            page_number=candidate.page_number if candidate else None,
+            source_line_start=candidate.source_line_start if candidate else None,
+            source_line_end=candidate.source_line_end if candidate else None,
+            extractor=candidate.extractor if candidate else None,
+            extractor_version=candidate.extractor_version if candidate else None,
+            extracted_via=candidate.extracted_via if candidate else None,
+            ocr_status=(text.status.value if text else run.ocr_status.value if run else None),
+            ocr_engine=text.engine if text else None,
+            ocr_engine_version=text.engine_version if text else None,
+            ocr_model=text.model if text else None,
+            ocr_language=text.language if text else None,
+            ingestion_initiated_by_user_id=run.requested_by_user_id if run else None,
+            ingestion_initiated_via=run.initiated_via if run else None,
+        )
 
     @server.tool(
         description=(

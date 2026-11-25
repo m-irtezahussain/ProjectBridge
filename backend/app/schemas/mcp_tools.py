@@ -3,7 +3,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.project import ProjectStatus
-from app.models.task import TaskPriority, TaskStatus
+from app.models.provenance import ActionOrigin
+from app.models.task import TaskPriority, TaskSource, TaskStatus
 from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.schemas.task import TaskCreate, TaskUpdate
 
@@ -182,7 +183,40 @@ class TaskSummary(BaseModel):
     status: TaskStatus
     priority: TaskPriority
     assignee_id: int | None
+    source_document_id: int | None
+    source_candidate_id: int | None
     project_id: int
+
+
+class TaskSourceReference(BaseModel):
+    """Compact provenance only; never includes raw files or complete OCR text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: int
+    project_id: int
+    task_created_via: TaskSource
+    has_document_source: bool
+    document_id: int | None
+    document_project_id: int | None
+    original_filename: str | None
+    content_sha256: str | None
+    candidate_id: int | None
+    ingestion_run_id: int | None
+    source_excerpt: str | None
+    page_number: int | None
+    source_line_start: int | None
+    source_line_end: int | None
+    extractor: str | None
+    extractor_version: str | None
+    extracted_via: ActionOrigin | None
+    ocr_status: str | None
+    ocr_engine: str | None
+    ocr_engine_version: str | None
+    ocr_model: str | None
+    ocr_language: str | None
+    ingestion_initiated_by_user_id: int | None
+    ingestion_initiated_via: ActionOrigin | None
 
 
 class TaskListInput(BaseModel):

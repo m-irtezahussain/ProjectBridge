@@ -19,7 +19,7 @@ from app.core.services.document_validation import (
     DocumentValidationService,
 )
 from app.core.services.mcp_auth import MCPPrincipal
-from app.models import Business, Document, DocumentStatus
+from app.models import ActionOrigin, Business, Document, DocumentStatus
 from app.repositories.businesses import BusinessRepository
 from app.repositories.documents import DocumentAuditRepository, DocumentRepository
 from app.repositories.mcp_operations import MCPAuditRepository
@@ -92,6 +92,7 @@ class DocumentManager:
             business_id=principal.business_id,
             project_id=data.project_id,
             uploaded_by_user_id=principal.user_id,
+            created_via=ActionOrigin.MCP,
             original_filename=safe_filename,
             declared_mime_type=data.mime_type,
             declared_size=data.size_bytes,

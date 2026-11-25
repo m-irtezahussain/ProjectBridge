@@ -81,6 +81,8 @@ class TaskRead(BaseModel):
     status: TaskStatus
     priority: TaskPriority
     assignee_id: int | None
+    source_document_id: int | None
+    source_candidate_id: int | None
     project_id: int
     is_deleted: bool
     created_by: TaskSource

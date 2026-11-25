@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, BigInteger, CheckConstraint, DateTime, ForeignKey, String, func
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.provenance import ActionOrigin
+
+if TYPE_CHECKING:
+    from app.models.project import Project
+    from app.models.task import Task
 
 
 class DocumentStatus(StrEnum):
@@ -40,6 +46,16 @@ class Document(Base):
     )
     uploaded_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    created_via: Mapped[ActionOrigin] = mapped_column(
+        SqlEnum(
+            ActionOrigin,
+            name="action_origin",
+            values_callable=lambda origins: [origin.value for origin in origins],
+        ),
+        nullable=False,
+        default=ActionOrigin.MCP,
+        server_default=ActionOrigin.MCP.value,
     )
     original_filename: Mapped[str] = mapped_column(String(200), nullable=False)
     declared_mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -80,6 +96,13 @@ class Document(Base):
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    project: Mapped[Project | None] = relationship(
+        back_populates="documents", lazy="raise"
+    )
+    source_tasks: Mapped[list[Task]] = relationship(
+        back_populates="source_document", lazy="raise"
+    )
+
 
 class DocumentAuditEvent(Base):
     """Append-only history of document lifecycle changes."""
@@ -95,6 +118,16 @@ class DocumentAuditEvent(Base):
     )
     actor_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    actor_origin: Mapped[ActionOrigin] = mapped_column(
+        SqlEnum(
+            ActionOrigin,
+            name="action_origin",
+            values_callable=lambda origins: [origin.value for origin in origins],
+        ),
+        nullable=False,
+        default=ActionOrigin.MCP,
+        server_default=ActionOrigin.MCP.value,
     )
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     outcome: Mapped[str] = mapped_column(String(50), nullable=False)

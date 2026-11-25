@@ -136,7 +136,7 @@ async def test_task_crud_soft_deletion_and_api_source() -> None:
     )
 
     assert created.project_id == 3
-    assert created.created_by is TaskSource.API
+    assert created.created_by is TaskSource.REST
     assert updated.status is TaskStatus.IN_REVIEW
     assert updated.description is None
     assert await manager.list_tasks(session, "access-token", 3) == [created]
