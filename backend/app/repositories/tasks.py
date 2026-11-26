@@ -83,6 +83,32 @@ class TaskRepository:
             )
         )
 
+    async def list_active_before_id(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        project_id: int,
+        *,
+        before_id: int | None,
+        limit: int,
+    ) -> list[Task]:
+        filters = [
+            Task.project_id == project_id,
+            Task.is_deleted.is_(False),
+            Project.business_id == business_id,
+            Project.deleted_at.is_(None),
+        ]
+        if before_id is not None:
+            filters.append(Task.id < before_id)
+        result = await session.scalars(
+            select(Task)
+            .join(Project, Task.project_id == Project.id)
+            .where(*filters)
+            .order_by(Task.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
     async def list_active_page(
         self,
         session: AsyncSession,

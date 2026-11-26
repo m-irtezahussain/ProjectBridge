@@ -116,6 +116,8 @@ class IngestionRepository:
         business_id: int,
         project_id: int,
         document_id: int,
+        source_text_id: int,
+        ingestion_run_id: int,
         chunks: list[str],
     ) -> None:
         await session.execute(
@@ -129,6 +131,8 @@ class IngestionRepository:
                 business_id=business_id,
                 project_id=project_id,
                 document_id=document_id,
+                source_text_id=source_text_id,
+                ingestion_run_id=ingestion_run_id,
                 chunk_index=index,
                 content=content,
             )

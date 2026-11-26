@@ -4,7 +4,17 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, BigInteger, CheckConstraint, DateTime, ForeignKey, String, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    func,
+    text,
+)
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +44,19 @@ class Document(Base):
         CheckConstraint(
             "size_bytes IS NULL OR size_bytes > 0",
             name="ck_documents_size_bytes_positive",
+        ),
+        Index(
+            "ix_documents_business_active_id_desc",
+            "business_id",
+            "id",
+            postgresql_where=text("archived_at IS NULL"),
+        ),
+        Index(
+            "ix_documents_business_project_active_id_desc",
+            "business_id",
+            "project_id",
+            "id",
+            postgresql_where=text("archived_at IS NULL"),
         ),
     )
 

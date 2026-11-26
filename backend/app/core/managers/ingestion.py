@@ -8,9 +8,10 @@ from app.config import Settings
 from app.core.managers.documents import DocumentNotFoundError, DocumentStateConflictError
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
 from app.core.services.document_storage import DocumentStorage
+from app.core.services.knowledge_text import chunk_knowledge_text
 from app.core.services.mcp_auth import MCPPrincipal
 from app.core.services.ocr import OCRProvider
-from app.core.services.task_extraction import SafeTaskCandidateExtractor, chunk_untrusted_text
+from app.core.services.task_extraction import SafeTaskCandidateExtractor
 from app.models import (
     ActionOrigin,
     Business,
@@ -20,6 +21,7 @@ from app.models import (
     IngestionEvent,
     IngestionRun,
     IngestionStatus,
+    SearchJobOperation,
     StageStatus,
     Task,
     TaskCandidate,
@@ -32,6 +34,7 @@ from app.repositories.documents import DocumentRepository
 from app.repositories.ingestion import IngestionRepository
 from app.repositories.mcp_operations import MCPAuditRepository
 from app.repositories.projects import ProjectRepository
+from app.repositories.search import SearchRepository
 from app.repositories.tasks import TaskRepository
 
 
@@ -58,6 +61,7 @@ class IngestionManager:
         tasks: TaskRepository | None = None,
         audit: MCPAuditRepository | None = None,
         extractor: SafeTaskCandidateExtractor | None = None,
+        search: SearchRepository | None = None,
     ) -> None:
         self._settings = settings
         self._storage = storage
@@ -69,6 +73,7 @@ class IngestionManager:
         self._tasks = tasks or TaskRepository()
         self._audit = audit or MCPAuditRepository()
         self._extractor = extractor or SafeTaskCandidateExtractor()
+        self._search = search or SearchRepository()
 
     async def _require_business(
         self, session: AsyncSession, principal: MCPPrincipal
@@ -406,6 +411,14 @@ class IngestionManager:
                     if isinstance(existing, Task):
                         candidate.created_task_id = existing.id
                         candidate.status = CandidateStatus.CREATED
+                        await self._search.enqueue(
+                            session,
+                            business_id=run.business_id,
+                            project_id=run.project_id,
+                            task_id=existing.id,
+                            operation=SearchJobOperation.UPSERT_TASK,
+                            max_attempts=self._settings.rag_max_attempts,
+                        )
                     else:
                         task = Task(
                             title=candidate.title,
@@ -421,6 +434,14 @@ class IngestionManager:
                         await session.flush()
                         candidate.created_task_id = task.id
                         candidate.status = CandidateStatus.CREATED
+                        await self._search.enqueue(
+                            session,
+                            business_id=run.business_id,
+                            project_id=run.project_id,
+                            task_id=task.id,
+                            operation=SearchJobOperation.UPSERT_TASK,
+                            max_attempts=self._settings.rag_max_attempts,
+                        )
             except Exception as error:
                 had_failure = True
                 candidate.status = CandidateStatus.FAILED
@@ -459,7 +480,21 @@ class IngestionManager:
             business_id=run.business_id,
             project_id=run.project_id,
             document_id=run.document_id,
-            chunks=chunk_untrusted_text(content),
+            source_text_id=text.id,
+            ingestion_run_id=run.id,
+            chunks=chunk_knowledge_text(
+                content,
+                max_characters=self._settings.rag_chunk_characters,
+                overlap_characters=self._settings.rag_chunk_overlap_characters,
+            ),
+        )
+        await self._search.enqueue(
+            session,
+            business_id=run.business_id,
+            project_id=run.project_id,
+            document_id=run.document_id,
+            operation=SearchJobOperation.UPSERT_DOCUMENT,
+            max_attempts=self._settings.rag_max_attempts,
         )
         run.indexing_status = StageStatus.COMPLETED
         self._add_event(

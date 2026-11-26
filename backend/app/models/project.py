@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
@@ -33,6 +33,12 @@ class Project(Base):
         CheckConstraint(
             "char_length(btrim(name)) BETWEEN 2 AND 200",
             name="ck_projects_name_length",
+        ),
+        Index(
+            "ix_projects_business_active_id_desc",
+            "business_id",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 

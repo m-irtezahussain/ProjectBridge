@@ -21,6 +21,8 @@ MCP_SCOPES = frozenset(
         "tasks:write",
         "documents:read",
         "documents:write",
+        "search:read",
+        "search:write",
         "offline_access",
     }
 )

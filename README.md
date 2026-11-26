@@ -8,9 +8,8 @@ interfaces over one backend core:
 - PostgreSQL through async SQLAlchemy and Alembic.
 
 The backend implements authentication, businesses, projects, tasks, immutable document
-upload, and a controlled OCR ingestion workflow through shared managers and services.
-Tenant-separated semantic RAG remains a later extension; ingestion currently creates a
-tenant-scoped PostgreSQL full-text index.
+upload, a controlled OCR ingestion workflow, and tenant-separated semantic knowledge
+search through shared managers and services.
 
 ## Start the stack
 
@@ -37,6 +36,16 @@ business before accepting a request. Retryable creates require an idempotency ke
 write records an audit outcome. Expected MCP failures use stable JSON error codes for validation,
 authorization, conflicts, and missing records. `get_service_status` uses the same `StatusService` as the REST
 liveness route to demonstrate the one-core/two-interface architecture.
+
+MCP clients can discover compact context through the static
+`projectbridge://capabilities` resource and six stable resource templates for individual
+projects, tasks, and documents plus their paginated collections. All resources use
+`application/vnd.projectbridge.context+json;version=1`. Collection resources use signed,
+opaque keyset cursors ordered by stable descending IDs, with a default page size of 50 and
+maximum of 100. Cursors are bound to the authenticated business and collection, so they
+cannot be reused to cross tenant, project, or resource boundaries. Resource representations
+include related stable URIs but exclude internal business IDs, storage keys, raw files, and
+complete OCR text.
 
 `get_task_source_reference` returns compact provenance for source-backed tasks: document
 and ingestion IDs, the immutable content hash, a bounded source excerpt, page/line
@@ -70,11 +79,11 @@ only explicitly marked `TODO:`, `TASK:`, and `ACTION:` lines as candidates, and 
 OCR and document text are always untrusted data. Their contents are never interpreted as
 permissions or tool instructions, and candidate extraction itself cannot call tools.
 Created tasks retain both source-document and source-candidate IDs. After confirmation,
-the worker indexes the OCR text and confirmed task titles in a business-scoped full-text
-index. `get_document_ingestion` and `list_task_candidates` expose progress; failed stages
-record a durable checkpoint and use bounded exponential retries. Exhausted or partial runs
-can be resumed with `retry_document_ingestion` without duplicating OCR text, candidates,
-or tasks.
+the ingestion worker creates normalized, overlapping source chunks and queues durable RAG
+synchronization jobs. `get_document_ingestion` and `list_task_candidates` expose progress;
+failed stages record a durable checkpoint and use bounded exponential retries. Exhausted or
+partial runs can be resumed with `retry_document_ingestion` without duplicating OCR text,
+candidates, tasks, or vector records.
 
 The OCR dependencies live in the `ocr` optional dependency group and only the worker image
 installs them. PaddleOCR downloads the configured official model files on first use, so the
@@ -84,6 +93,36 @@ needed; their defaults are documented in `.env.example`. The worker defaults to
 `linux/amd64` because PaddlePaddle does not publish a Linux ARM64 wheel; Docker Desktop can
 emulate it on Apple Silicon, and `OCR_WORKER_PLATFORM` remains overridable for supported
 deployment targets.
+
+Semantic search uses a self-hosted Ollama server for embeddings and a self-hosted Chroma
+server for vectors. Set the following deployment values (full subdomain URLs, without an
+API suffix):
+
+```dotenv
+OLLAMA_BASE_URL=https://ollama.example.com
+OLLAMA_EMBEDDING_MODEL=embeddinggemma
+CHROMA_BASE_URL=https://chroma.example.com
+CHROMA_TENANT=default_tenant
+CHROMA_DATABASE=default_database
+CHROMA_COLLECTION_PREFIX=projectbridge
+CHROMA_CF_ACCESS_CLIENT_ID=your-cloudflare-access-client-id
+CHROMA_CF_ACCESS_CLIENT_SECRET=your-cloudflare-access-client-secret
+```
+
+The embedding model named by `OLLAMA_EMBEDDING_MODEL` must already be pulled into Ollama.
+ProjectBridge calls Ollama's native `/api/embed` batch endpoint. Every Chroma HTTP request
+includes the two Cloudflare Access service-token headers. Each business receives a separate
+Chroma collection, all reads and deletes also contain a business metadata filter, and
+returned metadata is checked again before results are exposed.
+
+The `rag-worker` service processes transactional indexing jobs with leases, bounded retries,
+and deterministic vector IDs. Task edits and document ingestion upsert current content;
+task, document, and project archival synchronizes deletion; and
+`reindex_project_knowledge` rebuilds a project from PostgreSQL. MCP clients use
+`search_project_knowledge` with `search:read` and receive bounded excerpts plus compact
+project, document, task, chunk, OCR-text, and ingestion IDs. Returned excerpts are explicitly
+marked as untrusted content and can never authorize actions or trigger tools. Reindexing
+requires `search:write`.
 
 Stop containers while retaining the PostgreSQL volume:
 

@@ -291,6 +291,7 @@ class MCPErrorDetail(BaseModel):
         "authorization_error",
         "not_found",
         "conflict",
+        "service_unavailable",
     ]
     message: str
     retryable: bool = False

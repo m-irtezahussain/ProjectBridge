@@ -156,12 +156,65 @@ class Settings(BaseSettings):
     ocr_max_attempts: int = Field(
         default=5, ge=1, le=10, validation_alias="OCR_MAX_ATTEMPTS"
     )
+    chroma_base_url: str | None = Field(
+        default=None, validation_alias="CHROMA_BASE_URL"
+    )
+    chroma_tenant: str = Field(
+        default="default_tenant", validation_alias="CHROMA_TENANT"
+    )
+    chroma_database: str = Field(
+        default="default_database", validation_alias="CHROMA_DATABASE"
+    )
+    chroma_collection_prefix: str = Field(
+        default="projectbridge", validation_alias="CHROMA_COLLECTION_PREFIX"
+    )
+    chroma_cf_access_client_id: str | None = Field(
+        default=None, validation_alias="CHROMA_CF_ACCESS_CLIENT_ID"
+    )
+    chroma_cf_access_client_secret: SecretStr | None = Field(
+        default=None, validation_alias="CHROMA_CF_ACCESS_CLIENT_SECRET"
+    )
+    chroma_timeout_seconds: float = Field(
+        default=30.0, ge=1, le=120, validation_alias="CHROMA_TIMEOUT_SECONDS"
+    )
+    ollama_base_url: str | None = Field(
+        default=None, validation_alias="OLLAMA_BASE_URL"
+    )
+    ollama_embedding_model: str | None = Field(
+        default=None, validation_alias="OLLAMA_EMBEDDING_MODEL"
+    )
+    ollama_timeout_seconds: float = Field(
+        default=60.0, ge=1, le=300, validation_alias="OLLAMA_TIMEOUT_SECONDS"
+    )
+    rag_chunk_characters: int = Field(
+        default=1200, ge=200, le=8000, validation_alias="RAG_CHUNK_CHARACTERS"
+    )
+    rag_chunk_overlap_characters: int = Field(
+        default=150, ge=0, le=2000, validation_alias="RAG_CHUNK_OVERLAP_CHARACTERS"
+    )
+    rag_worker_concurrency: int = Field(
+        default=2, ge=1, le=8, validation_alias="RAG_WORKER_CONCURRENCY"
+    )
+    rag_poll_seconds: float = Field(
+        default=2.0, ge=0.25, le=30, validation_alias="RAG_POLL_SECONDS"
+    )
+    rag_lease_seconds: int = Field(
+        default=300, ge=30, le=3600, validation_alias="RAG_LEASE_SECONDS"
+    )
+    rag_max_attempts: int = Field(
+        default=5, ge=1, le=10, validation_alias="RAG_MAX_ATTEMPTS"
+    )
 
     @field_validator(
         "s3_endpoint_url",
         "s3_access_key_id",
         "s3_secret_access_key",
         "s3_bucket",
+        "chroma_base_url",
+        "chroma_cf_access_client_id",
+        "chroma_cf_access_client_secret",
+        "ollama_base_url",
+        "ollama_embedding_model",
         mode="before",
     )
     @classmethod
@@ -210,6 +263,37 @@ class Settings(BaseSettings):
                 raise ValueError("S3_ENDPOINT_URL must not contain credentials or extras")
             if self.environment == "production" and parsed.scheme != "https":
                 raise ValueError("S3_ENDPOINT_URL must use HTTPS in production")
+        rag_values = (
+            self.chroma_base_url,
+            self.chroma_cf_access_client_id,
+            self.chroma_cf_access_client_secret,
+            self.ollama_base_url,
+            self.ollama_embedding_model,
+        )
+        if any(value is not None for value in rag_values) and not all(
+            value is not None for value in rag_values
+        ):
+            raise ValueError(
+                "CHROMA_BASE_URL, CHROMA_CF_ACCESS_CLIENT_ID, "
+                "CHROMA_CF_ACCESS_CLIENT_SECRET, OLLAMA_BASE_URL, and "
+                "OLLAMA_EMBEDDING_MODEL must be configured together"
+            )
+        if self.rag_chunk_overlap_characters >= self.rag_chunk_characters:
+            raise ValueError(
+                "RAG_CHUNK_OVERLAP_CHARACTERS must be smaller than "
+                "RAG_CHUNK_CHARACTERS"
+            )
+        for field_name in ("chroma_base_url", "ollama_base_url"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            parsed = urlsplit(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(f"{field_name} must be an absolute HTTP(S) URL")
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError(f"{field_name} must not contain credentials or extras")
+            if self.environment == "production" and parsed.scheme != "https":
+                raise ValueError(f"{field_name} must use HTTPS in production")
         return self
 
 

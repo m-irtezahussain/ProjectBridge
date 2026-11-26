@@ -76,6 +76,31 @@ class DocumentRepository:
         )
         return list(result.all()), int(total or 0)
 
+    async def list_before_id(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        *,
+        project_id: int | None,
+        before_id: int | None,
+        limit: int,
+    ) -> list[Document]:
+        filters = [
+            Document.business_id == business_id,
+            Document.archived_at.is_(None),
+        ]
+        if project_id is not None:
+            filters.append(Document.project_id == project_id)
+        if before_id is not None:
+            filters.append(Document.id < before_id)
+        result = await session.scalars(
+            select(Document)
+            .where(*filters)
+            .order_by(Document.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
 
 class DocumentAuditRepository:
     def add(

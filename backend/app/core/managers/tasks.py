@@ -9,13 +9,22 @@ from app.core.services.mcp_mutations import (
     MCPMutationResult,
     request_fingerprint,
 )
-from app.models import Business, Task, TaskPriority, TaskSource, TaskStatus, User
+from app.models import (
+    Business,
+    SearchJobOperation,
+    Task,
+    TaskPriority,
+    TaskSource,
+    TaskStatus,
+    User,
+)
 from app.repositories.businesses import BusinessRepository
 from app.repositories.mcp_operations import (
     MCPAuditRepository,
     MCPIdempotencyRepository,
 )
 from app.repositories.projects import ProjectRepository
+from app.repositories.search import SearchRepository
 from app.repositories.tasks import TaskRepository, TaskSourceReferenceRecord
 from app.repositories.users import UserRepository
 from app.schemas.task import TaskCreate, TaskUpdate
@@ -41,6 +50,8 @@ class TaskManager:
         idempotency: MCPIdempotencyRepository | None = None,
         audit: MCPAuditRepository | None = None,
         users: UserRepository | None = None,
+        search: SearchRepository | None = None,
+        search_max_attempts: int = 5,
     ) -> None:
         self._auth = auth
         self._businesses = businesses or BusinessRepository()
@@ -49,6 +60,8 @@ class TaskManager:
         self._idempotency = idempotency or MCPIdempotencyRepository()
         self._audit = audit or MCPAuditRepository()
         self._users = users or UserRepository()
+        self._search = search or SearchRepository()
+        self._search_max_attempts = search_max_attempts
 
     async def _get_business(
         self, session: AsyncSession, access_token: str | None
@@ -114,6 +127,8 @@ class TaskManager:
             created_by=source,
         )
         self._tasks.add(session, task)
+        await session.flush()
+        await self._enqueue_task_sync(session, business.id, task)
         await session.commit()
         return task
 
@@ -125,6 +140,7 @@ class TaskManager:
         task_id: int,
         data: TaskUpdate,
     ) -> Task:
+        business = await self._get_business(session, access_token)
         task = await self.get_task(session, access_token, project_id, task_id)
         if data.title is not None:
             task.title = data.title
@@ -135,9 +151,9 @@ class TaskManager:
         if data.priority is not None:
             task.priority = data.priority
         if "assignee_id" in data.model_fields_set:
-            business = await self._get_business(session, access_token)
             await self._validate_assignee(session, business.id, data.assignee_id)
             task.assignee_id = data.assignee_id
+        await self._enqueue_task_sync(session, business.id, task)
         await session.commit()
         return task
 
@@ -150,6 +166,15 @@ class TaskManager:
     ) -> None:
         task = await self.get_task(session, access_token, project_id, task_id)
         task.is_deleted = True
+        business = await self._get_business(session, access_token)
+        await self._search.enqueue(
+            session,
+            business_id=business.id,
+            project_id=task.project_id,
+            task_id=task.id,
+            operation=SearchJobOperation.DELETE_TASK,
+            max_attempts=self._search_max_attempts,
+        )
         await session.commit()
 
     async def _require_principal_business(
@@ -363,6 +388,7 @@ class TaskManager:
             target_id=task.id,
             outcome="success",
         )
+        await self._enqueue_task_sync(session, principal.business_id, task)
         await session.commit()
         return MCPMutationResult(entity=task, replayed=False)
 
@@ -404,6 +430,7 @@ class TaskManager:
             target_id=task.id,
             outcome="success",
         )
+        await self._enqueue_task_sync(session, principal.business_id, task)
         await session.commit()
         return task
 
@@ -425,6 +452,15 @@ class TaskManager:
             raise TaskNotFoundError("Task not found")
         replayed = bool(task.is_deleted)
         task.is_deleted = True
+        if not replayed:
+            await self._search.enqueue(
+                session,
+                business_id=principal.business_id,
+                project_id=task.project_id,
+                task_id=task.id,
+                operation=SearchJobOperation.DELETE_TASK,
+                max_attempts=self._search_max_attempts,
+            )
         self._audit.add(
             session,
             principal=principal,
@@ -435,6 +471,18 @@ class TaskManager:
         )
         await session.commit()
         return replayed
+
+    async def _enqueue_task_sync(
+        self, session: AsyncSession, business_id: int, task: Task
+    ) -> None:
+        await self._search.enqueue(
+            session,
+            business_id=business_id,
+            project_id=task.project_id,
+            task_id=task.id,
+            operation=SearchJobOperation.UPSERT_TASK,
+            max_attempts=self._search_max_attempts,
+        )
 
     async def assign_task_for_principal(
         self,

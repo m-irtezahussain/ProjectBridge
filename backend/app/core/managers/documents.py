@@ -19,11 +19,18 @@ from app.core.services.document_validation import (
     DocumentValidationService,
 )
 from app.core.services.mcp_auth import MCPPrincipal
-from app.models import ActionOrigin, Business, Document, DocumentStatus
+from app.models import (
+    ActionOrigin,
+    Business,
+    Document,
+    DocumentStatus,
+    SearchJobOperation,
+)
 from app.repositories.businesses import BusinessRepository
 from app.repositories.documents import DocumentAuditRepository, DocumentRepository
 from app.repositories.mcp_operations import MCPAuditRepository
 from app.repositories.projects import ProjectRepository
+from app.repositories.search import SearchRepository
 from app.schemas.document import InitiateDocumentUploadInput
 
 
@@ -48,6 +55,7 @@ class DocumentManager:
         document_audit: DocumentAuditRepository | None = None,
         mcp_audit: MCPAuditRepository | None = None,
         validation: DocumentValidationService | None = None,
+        search: SearchRepository | None = None,
     ) -> None:
         self._settings = settings
         self._storage = storage
@@ -57,6 +65,7 @@ class DocumentManager:
         self._document_audit = document_audit or DocumentAuditRepository()
         self._mcp_audit = mcp_audit or MCPAuditRepository()
         self._validation = validation or DocumentValidationService(settings)
+        self._search = search or SearchRepository()
 
     async def _require_business(
         self, session: AsyncSession, principal: MCPPrincipal
@@ -431,6 +440,14 @@ class DocumentManager:
         if not replayed:
             document.archived_at = datetime.now(UTC)
             document.status = DocumentStatus.ARCHIVED
+            await self._search.enqueue(
+                session,
+                business_id=principal.business_id,
+                project_id=document.project_id,
+                document_id=document.id,
+                operation=SearchJobOperation.DELETE_DOCUMENT,
+                max_attempts=self._settings.rag_max_attempts,
+            )
         self._document_audit.add(
             session,
             document=document,

@@ -275,6 +275,16 @@ class DocumentSearchChunk(Base):
     document_id: Mapped[int] = mapped_column(
         ForeignKey("documents.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    source_text_id: Mapped[int] = mapped_column(
+        ForeignKey("document_texts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    ingestion_run_id: Mapped[int] = mapped_column(
+        ForeignKey("document_ingestion_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     search_vector: Mapped[object] = mapped_column(

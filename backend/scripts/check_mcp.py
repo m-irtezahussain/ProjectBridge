@@ -5,6 +5,7 @@ import os
 
 import anyio
 from mcp.client.session_group import ClientSessionGroup, StreamableHttpParameters
+from pydantic import AnyUrl
 
 
 async def main() -> None:
@@ -18,6 +19,11 @@ async def main() -> None:
     async with ClientSessionGroup() as group:
         session = await group.connect_to_server(parameters)
         tools = await session.list_tools()
+        resources = await session.list_resources()
+        templates = await session.list_resource_templates()
+        capabilities = await session.read_resource(
+            AnyUrl("projectbridge://capabilities")
+        )
         result = await session.call_tool("get_service_status", {})
 
     assert [tool.name for tool in tools.tools] == [
@@ -47,9 +53,23 @@ async def main() -> None:
         "list_task_candidates",
         "confirm_task_candidates",
         "retry_document_ingestion",
+        "search_project_knowledge",
+        "reindex_project_knowledge",
     ]
     assert result.is_error is False
-    print(json.dumps(result.structured_content, sort_keys=True))
+    assert [str(resource.uri) for resource in resources.resources] == [
+        "projectbridge://capabilities"
+    ]
+    assert len(templates.resource_templates) == 6
+    print(
+        json.dumps(
+            {
+                "status": result.structured_content,
+                "capabilities": json.loads(capabilities.contents[0].text),
+            },
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

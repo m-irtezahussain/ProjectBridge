@@ -37,6 +37,22 @@ x-backend-environment: &backend-environment
   OCR_POLL_SECONDS: ${OCR_POLL_SECONDS:-2}
   OCR_LEASE_SECONDS: ${OCR_LEASE_SECONDS:-600}
   OCR_MAX_ATTEMPTS: ${OCR_MAX_ATTEMPTS:-5}
+  CHROMA_BASE_URL: ${CHROMA_BASE_URL:-}
+  CHROMA_TENANT: ${CHROMA_TENANT:-default_tenant}
+  CHROMA_DATABASE: ${CHROMA_DATABASE:-default_database}
+  CHROMA_COLLECTION_PREFIX: ${CHROMA_COLLECTION_PREFIX:-projectbridge}
+  CHROMA_CF_ACCESS_CLIENT_ID: ${CHROMA_CF_ACCESS_CLIENT_ID:-}
+  CHROMA_CF_ACCESS_CLIENT_SECRET: ${CHROMA_CF_ACCESS_CLIENT_SECRET:-}
+  CHROMA_TIMEOUT_SECONDS: ${CHROMA_TIMEOUT_SECONDS:-30}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+  OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-}
+  OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+  RAG_CHUNK_CHARACTERS: ${RAG_CHUNK_CHARACTERS:-1200}
+  RAG_CHUNK_OVERLAP_CHARACTERS: ${RAG_CHUNK_OVERLAP_CHARACTERS:-150}
+  RAG_WORKER_CONCURRENCY: ${RAG_WORKER_CONCURRENCY:-2}
+  RAG_POLL_SECONDS: ${RAG_POLL_SECONDS:-2}
+  RAG_LEASE_SECONDS: ${RAG_LEASE_SECONDS:-300}
+  RAG_MAX_ATTEMPTS: ${RAG_MAX_ATTEMPTS:-5}
 
 services:
   db:
@@ -120,6 +136,20 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 10m
+
+  rag-worker:
+    build:
+      context: ./backend
+      target: rag-worker
+    environment: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 5m
 
   frontend:
     build:

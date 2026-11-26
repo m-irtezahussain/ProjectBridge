@@ -24,6 +24,7 @@ from app.models.oauth import (
 from app.models.project import Project, ProjectStatus
 from app.models.provenance import ActionOrigin
 from app.models.refresh_token import RefreshToken
+from app.models.search import SearchIndexJob, SearchJobOperation, SearchJobStatus
 from app.models.task import Task, TaskPriority, TaskSource, TaskStatus
 from app.models.user import User
 
@@ -52,6 +53,9 @@ __all__ = [
     "ProjectStatus",
     "ActionOrigin",
     "RefreshToken",
+    "SearchIndexJob",
+    "SearchJobOperation",
+    "SearchJobStatus",
     "Task",
     "TaskPriority",
     "TaskSource",

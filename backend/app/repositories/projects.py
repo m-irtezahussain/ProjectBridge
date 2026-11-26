@@ -43,6 +43,28 @@ class ProjectRepository:
             )
         )
 
+    async def list_active_before_id(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        *,
+        before_id: int | None,
+        limit: int,
+    ) -> list[Project]:
+        filters = [
+            Project.business_id == business_id,
+            Project.deleted_at.is_(None),
+        ]
+        if before_id is not None:
+            filters.append(Project.id < before_id)
+        result = await session.scalars(
+            select(Project)
+            .where(*filters)
+            .order_by(Project.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
     async def list_active_page(
         self,
         session: AsyncSession,

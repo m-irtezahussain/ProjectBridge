@@ -10,13 +10,14 @@ from app.core.services.mcp_mutations import (
     MCPMutationResult,
     request_fingerprint,
 )
-from app.models import Business, Project, ProjectStatus
+from app.models import Business, Project, ProjectStatus, SearchJobOperation
 from app.repositories.businesses import BusinessRepository
 from app.repositories.mcp_operations import (
     MCPAuditRepository,
     MCPIdempotencyRepository,
 )
 from app.repositories.projects import ProjectRepository
+from app.repositories.search import SearchRepository
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
 
@@ -38,12 +39,16 @@ class ProjectManager:
         projects: ProjectRepository | None = None,
         idempotency: MCPIdempotencyRepository | None = None,
         audit: MCPAuditRepository | None = None,
+        search: SearchRepository | None = None,
+        search_max_attempts: int = 5,
     ) -> None:
         self._auth = auth
         self._businesses = businesses or BusinessRepository()
         self._projects = projects or ProjectRepository()
         self._idempotency = idempotency or MCPIdempotencyRepository()
         self._audit = audit or MCPAuditRepository()
+        self._search = search or SearchRepository()
+        self._search_max_attempts = search_max_attempts
 
     async def _get_business(
         self, session: AsyncSession, access_token: str | None
@@ -284,6 +289,13 @@ class ProjectManager:
         replayed = project.deleted_at is not None
         if not replayed:
             project.deleted_at = datetime.now(UTC)
+            await self._search.enqueue(
+                session,
+                business_id=principal.business_id,
+                project_id=project.id,
+                operation=SearchJobOperation.DELETE_PROJECT,
+                max_attempts=self._search_max_attempts,
+            )
         self._audit.add(
             session,
             principal=principal,

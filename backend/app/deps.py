@@ -7,10 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.core.managers import (
     AuthManager,
+    ContextResourceManager,
     DocumentManager,
     IngestionManager,
     OAuthManager,
     ProjectManager,
+    SearchIndexingManager,
+    SemanticSearchManager,
     TaskManager,
 )
 from app.core.services.document_storage import (
@@ -19,12 +22,16 @@ from app.core.services.document_storage import (
     S3DocumentStorage,
     UnavailableDocumentStorage,
 )
+from app.core.services.embeddings import OllamaEmbeddingService
 from app.core.services.mcp_oauth import MCPTokenService
 from app.core.services.ocr import PaddleOCRProvider
 from app.core.services.rate_limits import AuthRateLimiter
 from app.core.services.refresh_tokens import RefreshTokenService
+from app.core.services.resource_cursor import ResourceCursorCodec
 from app.core.services.tokens import TokenService
+from app.core.services.vector_store import ChromaVectorStore
 from app.db import get_session
+from app.repositories.search import SearchRepository
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -49,7 +56,10 @@ OAuthManagerDep = Annotated[OAuthManager, Depends(get_oauth_manager)]
 
 @lru_cache
 def get_project_manager() -> ProjectManager:
-    return ProjectManager(get_auth_manager())
+    settings = get_settings()
+    return ProjectManager(
+        get_auth_manager(), search_max_attempts=settings.rag_max_attempts
+    )
 
 
 ProjectManagerDep = Annotated[ProjectManager, Depends(get_project_manager)]
@@ -57,7 +67,10 @@ ProjectManagerDep = Annotated[ProjectManager, Depends(get_project_manager)]
 
 @lru_cache
 def get_task_manager() -> TaskManager:
-    return TaskManager(get_auth_manager())
+    settings = get_settings()
+    return TaskManager(
+        get_auth_manager(), search_max_attempts=settings.rag_max_attempts
+    )
 
 
 TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
@@ -88,6 +101,38 @@ def get_ingestion_manager() -> IngestionManager:
         get_document_storage(),
         PaddleOCRProvider(settings.ocr_model, settings.ocr_language),
     )
+
+
+@lru_cache
+def get_embedding_service() -> OllamaEmbeddingService:
+    return OllamaEmbeddingService(get_settings())
+
+
+@lru_cache
+def get_vector_store() -> ChromaVectorStore:
+    return ChromaVectorStore(get_settings())
+
+
+@lru_cache
+def get_semantic_search_manager() -> SemanticSearchManager:
+    return SemanticSearchManager(
+        get_embedding_service(), get_vector_store(), get_settings()
+    )
+
+
+@lru_cache
+def get_search_indexing_manager() -> SearchIndexingManager:
+    return SearchIndexingManager(
+        get_settings(),
+        get_embedding_service(),
+        get_vector_store(),
+        SearchRepository(),
+    )
+
+
+@lru_cache
+def get_context_resource_manager() -> ContextResourceManager:
+    return ContextResourceManager(ResourceCursorCodec(get_settings().mcp_jwt_secret))
 
 
 @lru_cache

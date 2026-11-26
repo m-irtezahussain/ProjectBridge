@@ -16,14 +16,17 @@ from app.core.managers.documents import (
 )
 from app.core.managers.ingestion import IngestionConflictError, IngestionNotFoundError
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
+from app.core.managers.search import SearchConflictError
 from app.core.managers.tasks import AssigneeNotFoundError, TaskNotFoundError
 from app.core.services.document_storage import DocumentStorageError
 from app.core.services.document_validation import DocumentValidationError
+from app.core.services.embeddings import EmbeddingServiceError
 from app.core.services.mcp_auth import MCPAuthenticationError, MCPAuthorizationError
 from app.core.services.mcp_mutations import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
 )
+from app.core.services.vector_store import VectorStoreError
 from app.mcp.auth import MCPDatabaseSessions, require_mcp_principal
 from app.models.project import ProjectStatus
 from app.schemas.mcp_tools import (
@@ -118,8 +121,19 @@ async def structured_mcp_errors() -> AsyncIterator[None]:
     except (IdempotencyConflictError, IdempotencyInProgressError) as error:
         detail = MCPErrorDetail(code="conflict", message=str(error))
         raise ToolError(detail.model_dump_json()) from error
-    except (DocumentStateConflictError, IngestionConflictError) as error:
+    except (
+        DocumentStateConflictError,
+        IngestionConflictError,
+        SearchConflictError,
+    ) as error:
         detail = MCPErrorDetail(code="conflict", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except (EmbeddingServiceError, VectorStoreError) as error:
+        detail = MCPErrorDetail(
+            code="service_unavailable",
+            message="Project knowledge search is temporarily unavailable",
+            retryable=True,
+        )
         raise ToolError(detail.model_dump_json()) from error
     except DocumentStorageError as error:
         detail = MCPErrorDetail(
