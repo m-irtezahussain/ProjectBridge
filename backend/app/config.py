@@ -95,6 +95,24 @@ class Settings(BaseSettings):
         le=10,
         validation_alias="APP_MCP_AUTHORIZATION_CODE_MINUTES",
     )
+    mcp_idempotency_lease_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=600,
+        validation_alias="MCP_IDEMPOTENCY_LEASE_SECONDS",
+    )
+    mcp_idempotency_retention_hours: int = Field(
+        default=168,
+        ge=24,
+        le=24 * 90,
+        validation_alias="MCP_IDEMPOTENCY_RETENTION_HOURS",
+    )
+    mcp_idempotency_cleanup_batch: int = Field(
+        default=500,
+        ge=10,
+        le=5000,
+        validation_alias="MCP_IDEMPOTENCY_CLEANUP_BATCH",
+    )
     s3_endpoint_url: str | None = Field(
         default=None, validation_alias="S3_ENDPOINT_URL"
     )

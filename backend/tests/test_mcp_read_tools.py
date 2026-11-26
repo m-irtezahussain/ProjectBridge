@@ -51,6 +51,7 @@ class FakeProjects:
             description="Customer workspace",
             business_id=11,
             status=ProjectStatus.ACTIVE,
+            version=1,
         )
 
     async def list_projects_page_for_principal(
@@ -83,6 +84,7 @@ class FakeTasks:
             status=TaskStatus.TODO,
             priority=TaskPriority.HIGH,
             assignee_id=7,
+            version=1,
         )
         self.assignee = User(
             id=7,
@@ -188,6 +190,7 @@ async def test_read_tools_return_compact_typed_results(
                 "name": "Client Portal",
                 "status": "Active",
                 "description": "Customer workspace",
+                "version": 1,
             }
         ],
         "total": 1,
@@ -208,6 +211,7 @@ async def test_read_tools_return_compact_typed_results(
                 "source_document_id": None,
                 "source_candidate_id": None,
                 "project_id": 3,
+                "version": 1,
             }
         ],
         "total": 1,

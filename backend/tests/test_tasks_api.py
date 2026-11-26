@@ -20,6 +20,7 @@ class FakeTaskManager:
             project_id=4,
             is_deleted=False,
             created_by=TaskSource.API,
+            version=1,
         )
 
     async def list_tasks(
@@ -125,6 +126,7 @@ async def test_tasks_crud_contract_and_validation() -> None:
         "project_id": 4,
         "is_deleted": False,
         "created_by": "api",
+        "version": 1,
     }
     assert updated.status_code == 200
     assert updated.json()["status"] == "in review"

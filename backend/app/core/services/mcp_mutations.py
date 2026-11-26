@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from app.repositories.mcp_operations import IdempotencyClaim
 
 
 class IdempotencyConflictError(ValueError):
@@ -11,6 +17,10 @@ class IdempotencyConflictError(ValueError):
 
 
 class IdempotencyInProgressError(ValueError):
+    pass
+
+
+class MutationVersionConflictError(ValueError):
     pass
 
 
@@ -38,3 +48,27 @@ def request_fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def completed_idempotency_replay(
+    claim: IdempotencyClaim,
+    *,
+    fingerprint: str,
+    result_type: str,
+) -> dict[str, object] | None:
+    if claim.record.request_fingerprint != fingerprint:
+        raise IdempotencyConflictError(
+            "Idempotency key was already used with different input"
+        )
+    if claim.is_new:
+        return None
+    if (
+        claim.record.state != "completed"
+        or claim.record.result_type != result_type
+        or claim.record.result_id is None
+        or claim.record.response_body is None
+    ):
+        raise IdempotencyInProgressError(
+            "The mutation is still in progress; retry with the same idempotency key"
+        )
+    return claim.record.response_body

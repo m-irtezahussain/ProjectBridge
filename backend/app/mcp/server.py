@@ -9,6 +9,7 @@ from app.core.services.mcp_auth import MCPAuthenticationService
 from app.core.services.mcp_oauth import MCPTokenService
 from app.core.services.status import status_service
 from app.deps import (
+    get_audit_manager,
     get_context_resource_manager,
     get_document_manager,
     get_ingestion_manager,
@@ -16,6 +17,7 @@ from app.deps import (
     get_semantic_search_manager,
     get_task_manager,
 )
+from app.mcp.audit_tools import register_audit_tools
 from app.mcp.auth import MCPDatabaseSessions, ProjectBridgeTokenVerifier
 from app.mcp.document_tools import register_document_tools
 from app.mcp.ingestion_tools import register_ingestion_tools
@@ -78,6 +80,7 @@ register_document_tools(
 )
 register_ingestion_tools(mcp_server, mcp_sessions, get_ingestion_manager())
 register_search_tools(mcp_server, mcp_sessions, get_semantic_search_manager())
+register_audit_tools(mcp_server, mcp_sessions, get_audit_manager())
 register_context_resources(
     mcp_server, mcp_sessions, get_context_resource_manager()
 )

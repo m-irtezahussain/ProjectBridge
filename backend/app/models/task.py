@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
@@ -48,6 +48,7 @@ class Task(Base):
             "char_length(btrim(title)) BETWEEN 2 AND 200",
             name="ck_tasks_title_length",
         ),
+        CheckConstraint("version > 0", name="ck_tasks_version_positive"),
         Index(
             "ix_tasks_project_active_id_desc",
             "project_id",
@@ -109,6 +110,10 @@ class Task(Base):
         default=TaskSource.API,
         server_default=TaskSource.API.value,
     )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    __mapper_args__ = {"version_id_col": version}
 
     project: Mapped[Project] = relationship(back_populates="tasks", lazy="raise")
     assignee: Mapped[User | None] = relationship(lazy="raise")

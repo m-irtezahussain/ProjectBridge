@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.document import DocumentStatus
 from app.models.provenance import ActionOrigin
@@ -51,6 +51,7 @@ class DocumentSummary(BaseModel):
     failure_message: str | None
     created_at: datetime
     updated_at: datetime
+    version: int
 
 
 class DocumentListResult(BaseModel):
@@ -92,6 +93,21 @@ class ArchiveDocumentResult(BaseModel):
     document_id: int
     archived: bool
     replayed: bool
+
+
+class ArchiveDocumentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
 
 class DocumentDownloadResult(BaseModel):

@@ -36,9 +36,13 @@ def register_ingestion_tools(
             principal = require_mcp_principal("documents:write", "tasks:write")
             async with sessions.session() as session:
                 run = await ingestion.start(
-                    session, principal, input.document_id, input.project_id
+                    session,
+                    principal,
+                    input.document_id,
+                    input.project_id,
+                    input.idempotency_key,
                 )
-        return IngestionRunSummary.model_validate(run)
+        return IngestionRunSummary.model_validate(run.entity)
 
     @server.tool(
         description="Get durable OCR, extraction, task-creation, and indexing progress.",
@@ -94,14 +98,16 @@ def register_ingestion_tools(
         async with structured_mcp_errors():
             principal = require_mcp_principal("documents:write", "tasks:write")
             async with sessions.session() as session:
-                run = await ingestion.confirm_candidates(
+                result = await ingestion.confirm_candidates(
                     session,
                     principal,
                     input.ingestion_run_id,
                     input.approved_candidate_ids,
                     input.rejected_candidate_ids,
+                    input.expected_version,
+                    input.idempotency_key,
                 )
-        return IngestionRunSummary.model_validate(run)
+        return IngestionRunSummary.model_validate(result.entity)
 
     @server.tool(
         description=(
@@ -117,7 +123,11 @@ def register_ingestion_tools(
         async with structured_mcp_errors():
             principal = require_mcp_principal("documents:write", "tasks:write")
             async with sessions.session() as session:
-                run = await ingestion.retry(
-                    session, principal, input.ingestion_run_id
+                result = await ingestion.retry(
+                    session,
+                    principal,
+                    input.ingestion_run_id,
+                    input.expected_version,
+                    input.idempotency_key,
                 )
-        return IngestionRunSummary.model_validate(run)
+        return IngestionRunSummary.model_validate(result.entity)

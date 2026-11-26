@@ -38,6 +38,7 @@ class FakeDocuments:
             upload_expires_at=now,
             created_at=now,
             updated_at=now,
+            version=1,
         )
 
     async def initiate_upload(
@@ -120,7 +121,16 @@ async def test_document_tools_expose_upload_status_download_and_archive(
         download = await client.call_tool(
             "get_document_download_url", {"document_id": 5}
         )
-        archived = await client.call_tool("archive_document", {"document_id": 5})
+        archived = await client.call_tool(
+            "archive_document",
+            {
+                "input": {
+                    "document_id": 5,
+                    "expected_version": 1,
+                    "idempotency_key": "archive-document-key",
+                }
+            },
+        )
 
     assert initiated.structured_content["upload"] == {
         "method": "POST",

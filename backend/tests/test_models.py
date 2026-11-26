@@ -93,6 +93,7 @@ def test_project_table_contains_tenant_status_and_soft_dismissal_columns() -> No
         "business_id",
         "status",
         "deleted_at",
+        "version",
     }
     assert len(foreign_keys) == 1
     assert foreign_keys[0].target_fullname == "business.id"
@@ -141,6 +142,7 @@ def test_task_table_contains_project_state_and_source_columns() -> None:
         "source_candidate_id",
         "is_deleted",
         "created_by",
+        "version",
     }
     assert len(foreign_keys) == 1
     assert foreign_keys[0].target_fullname == "projects.id"

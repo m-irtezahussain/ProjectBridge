@@ -3,6 +3,7 @@ from enum import StrEnum
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     Computed,
     DateTime,
     Float,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -103,6 +105,17 @@ class DocumentText(Base):
 
 class IngestionRun(Base):
     __tablename__ = "document_ingestion_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "version > 0", name="ck_document_ingestion_runs_version_positive"
+        ),
+        Index(
+            "uq_document_ingestion_active_document",
+            "document_id",
+            unique=True,
+            postgresql_where=text("status NOT IN ('completed', 'failed')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     document_id: Mapped[int] = mapped_column(
@@ -198,10 +211,21 @@ class IngestionRun(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    __mapper_args__ = {"version_id_col": version}
 
 
 class TaskCandidate(Base):
     __tablename__ = "document_task_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "ingestion_run_id",
+            "dedupe_key",
+            name="uq_task_candidate_run_dedupe_key",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     ingestion_run_id: Mapped[int] = mapped_column(
@@ -222,6 +246,7 @@ class TaskCandidate(Base):
         ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     source_excerpt: Mapped[str] = mapped_column(String(500), nullable=False)
     page_number: Mapped[int | None] = mapped_column(Integer)

@@ -13,6 +13,7 @@ from app.mcp.tools import (
     structured_mcp_errors,
 )
 from app.schemas.document import (
+    ArchiveDocumentInput,
     ArchiveDocumentResult,
     DocumentDownloadResult,
     DocumentListInput,
@@ -158,16 +159,20 @@ def register_document_tools(
         structured_output=True,
     )
     async def archive_document(
-        document_id: Annotated[int, Field(gt=0)],
+        input: ArchiveDocumentInput,
     ) -> ArchiveDocumentResult:
         async with structured_mcp_errors():
             principal = require_mcp_principal("documents:write")
             async with sessions.session() as session:
                 replayed = await documents.archive_document(
-                    session, principal, document_id
+                    session,
+                    principal,
+                    input.document_id,
+                    input.expected_version,
+                    input.idempotency_key,
                 )
         return ArchiveDocumentResult(
-            document_id=document_id,
+            document_id=input.document_id,
             archived=True,
             replayed=replayed,
         )

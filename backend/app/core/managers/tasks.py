@@ -7,9 +7,12 @@ from app.core.services.mcp_mutations import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
     MCPMutationResult,
+    MutationVersionConflictError,
+    completed_idempotency_replay,
     request_fingerprint,
 )
 from app.models import (
+    ActionOrigin,
     Business,
     SearchJobOperation,
     Task,
@@ -74,6 +77,17 @@ class TaskManager:
             raise BusinessRequiredError("Business registration required")
         return business
 
+    async def _get_actor_business(
+        self, session: AsyncSession, access_token: str | None
+    ) -> tuple[User, Business]:
+        user = await self._auth.get_user(session, access_token, "access")
+        if user is None:
+            raise AuthenticationError("Authentication required")
+        business = await self._businesses.get_for_owner(session, user.id)
+        if business is None:
+            raise BusinessRequiredError("Business registration required")
+        return user, business
+
     async def _require_project(
         self, session: AsyncSession, business_id: int, project_id: int
     ) -> None:
@@ -114,7 +128,7 @@ class TaskManager:
         data: TaskCreate,
         source: TaskSource = TaskSource.REST,
     ) -> Task:
-        business = await self._get_business(session, access_token)
+        actor, business = await self._get_actor_business(session, access_token)
         await self._require_project(session, business.id, project_id)
         await self._validate_assignee(session, business.id, data.assignee_id)
         task = Task(
@@ -129,6 +143,16 @@ class TaskManager:
         self._tasks.add(session, task)
         await session.flush()
         await self._enqueue_task_sync(session, business.id, task)
+        self._audit.record(
+            session,
+            business_id=business.id,
+            actor_user_id=actor.id,
+            interface=ActionOrigin.REST,
+            action="task.create",
+            target_type="task",
+            target_id=task.id,
+            outcome="success",
+        )
         await session.commit()
         return task
 
@@ -140,8 +164,21 @@ class TaskManager:
         task_id: int,
         data: TaskUpdate,
     ) -> Task:
-        business = await self._get_business(session, access_token)
-        task = await self.get_task(session, access_token, project_id, task_id)
+        actor, business = await self._get_actor_business(session, access_token)
+        task = await self._tasks.get_active(session, business.id, project_id, task_id)
+        if task is None:
+            self._audit.record(
+                session,
+                business_id=business.id,
+                actor_user_id=actor.id,
+                interface=ActionOrigin.REST,
+                action="task.update",
+                target_type="task",
+                target_id=task_id,
+                outcome="not_found",
+            )
+            await session.commit()
+            raise TaskNotFoundError("Task not found")
         if data.title is not None:
             task.title = data.title
         if "description" in data.model_fields_set:
@@ -154,6 +191,16 @@ class TaskManager:
             await self._validate_assignee(session, business.id, data.assignee_id)
             task.assignee_id = data.assignee_id
         await self._enqueue_task_sync(session, business.id, task)
+        self._audit.record(
+            session,
+            business_id=business.id,
+            actor_user_id=actor.id,
+            interface=ActionOrigin.REST,
+            action="task.update",
+            target_type="task",
+            target_id=task.id,
+            outcome="success",
+        )
         await session.commit()
         return task
 
@@ -164,9 +211,22 @@ class TaskManager:
         project_id: int,
         task_id: int,
     ) -> None:
-        task = await self.get_task(session, access_token, project_id, task_id)
+        actor, business = await self._get_actor_business(session, access_token)
+        task = await self._tasks.get_active(session, business.id, project_id, task_id)
+        if task is None:
+            self._audit.record(
+                session,
+                business_id=business.id,
+                actor_user_id=actor.id,
+                interface=ActionOrigin.REST,
+                action="task.archive",
+                target_type="task",
+                target_id=task_id,
+                outcome="not_found",
+            )
+            await session.commit()
+            raise TaskNotFoundError("Task not found")
         task.is_deleted = True
-        business = await self._get_business(session, access_token)
         await self._search.enqueue(
             session,
             business_id=business.id,
@@ -174,6 +234,16 @@ class TaskManager:
             task_id=task.id,
             operation=SearchJobOperation.DELETE_TASK,
             max_attempts=self._search_max_attempts,
+        )
+        self._audit.record(
+            session,
+            business_id=business.id,
+            actor_user_id=actor.id,
+            interface=ActionOrigin.REST,
+            action="task.archive",
+            target_type="task",
+            target_id=task.id,
+            outcome="success",
         )
         await session.commit()
 
@@ -362,6 +432,7 @@ class TaskManager:
             project_id=project_id,
             assignee_id=data.assignee_id,
             created_by=TaskSource.MCP,
+            version=1,
         )
         self._tasks.add(session, task)
         await session.flush()
@@ -373,6 +444,9 @@ class TaskManager:
             "priority": task.priority.value,
             "project_id": task.project_id,
             "assignee_id": task.assignee_id,
+            "source_document_id": task.source_document_id,
+            "source_candidate_id": task.source_candidate_id,
+            "version": task.version,
         }
         self._idempotency.complete(
             claim.record,
@@ -399,16 +473,67 @@ class TaskManager:
         project_id: int,
         task_id: int,
         data: TaskUpdate,
-    ) -> Task:
+        expected_version: int,
+        idempotency_key: str,
+    ) -> MCPMutationResult[Task]:
         await self._require_principal_business(session, principal)
-        task = await self._tasks.get_active(
+        tool_name = "update_task"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "expected_version": expected_version,
+                "task": data.model_dump(mode="json"),
+            },
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="task"
+        )
+        task: Task | None
+        if replay is not None:
+            task = self._task_from_snapshot(replay)
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task.id,
+                outcome="idempotent_replay",
+            )
+            await session.commit()
+            return MCPMutationResult(entity=task, replayed=True)
+        task = await self._tasks.get_active_for_update(
             session, principal.business_id, project_id, task_id
         )
         if task is None:
+            await session.rollback()
             await self._audit_task_not_found(
-                session, principal, "update_task", task_id
+                session, principal, tool_name, task_id
             )
             raise TaskNotFoundError("Task not found")
+        if task.version != expected_version:
+            current_version = task.version
+            await session.rollback()
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task_id,
+                outcome="version_conflict",
+            )
+            await session.commit()
+            raise MutationVersionConflictError(
+                f"Task version conflict: expected {expected_version}, current {current_version}"
+            )
         if data.title is not None:
             task.title = data.title
         if "description" in data.model_fields_set:
@@ -418,21 +543,42 @@ class TaskManager:
         if data.priority is not None:
             task.priority = data.priority
         if "assignee_id" in data.model_fields_set:
-            await self._validate_assignee(
-                session, principal.business_id, data.assignee_id
-            )
+            try:
+                await self._validate_assignee(
+                    session, principal.business_id, data.assignee_id
+                )
+            except AssigneeNotFoundError:
+                await session.rollback()
+                self._audit.add(
+                    session,
+                    principal=principal,
+                    tool_name=tool_name,
+                    target_type="task",
+                    target_id=task_id,
+                    outcome="invalid_assignee",
+                )
+                await session.commit()
+                raise
             task.assignee_id = data.assignee_id
+        task.version += 1
+        await session.flush()
+        self._idempotency.complete(
+            claim.record,
+            result_type="task",
+            result_id=task.id,
+            response_body=self._task_snapshot(task),
+        )
         self._audit.add(
             session,
             principal=principal,
-            tool_name="update_task",
+            tool_name=tool_name,
             target_type="task",
             target_id=task.id,
             outcome="success",
         )
         await self._enqueue_task_sync(session, principal.business_id, task)
         await session.commit()
-        return task
+        return MCPMutationResult(entity=task, replayed=False)
 
     async def archive_task_for_principal(
         self,
@@ -440,19 +586,69 @@ class TaskManager:
         principal: MCPPrincipal,
         project_id: int,
         task_id: int,
+        expected_version: int,
+        idempotency_key: str,
     ) -> bool:
         await self._require_principal_business(session, principal)
-        task = await self._tasks.get_for_project(
+        tool_name = "archive_task"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "expected_version": expected_version,
+            },
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="task_archive"
+        )
+        if replay is not None:
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task_id,
+                outcome="idempotent_replay",
+            )
+            await session.commit()
+            return True
+        task = await self._tasks.get_for_project_for_update(
             session, principal.business_id, project_id, task_id
         )
         if task is None:
+            await session.rollback()
             await self._audit_task_not_found(
-                session, principal, "archive_task", task_id
+                session, principal, tool_name, task_id
             )
             raise TaskNotFoundError("Task not found")
         replayed = bool(task.is_deleted)
-        task.is_deleted = True
         if not replayed:
+            if task.version != expected_version:
+                current_version = task.version
+                await session.rollback()
+                self._audit.add(
+                    session,
+                    principal=principal,
+                    tool_name=tool_name,
+                    target_type="task",
+                    target_id=task_id,
+                    outcome="version_conflict",
+                )
+                await session.commit()
+                raise MutationVersionConflictError(
+                    f"Task version conflict: expected {expected_version}, "
+                    f"current {current_version}"
+                )
+            task.is_deleted = True
+            task.version += 1
             await self._search.enqueue(
                 session,
                 business_id=principal.business_id,
@@ -461,10 +657,16 @@ class TaskManager:
                 operation=SearchJobOperation.DELETE_TASK,
                 max_attempts=self._search_max_attempts,
             )
+        self._idempotency.complete(
+            claim.record,
+            result_type="task_archive",
+            result_id=task.id,
+            response_body={"archived": True, "version": task.version},
+        )
         self._audit.add(
             session,
             principal=principal,
-            tool_name="archive_task",
+            tool_name=tool_name,
             target_type="task",
             target_id=task.id,
             outcome="idempotent_replay" if replayed else "success",
@@ -491,30 +693,103 @@ class TaskManager:
         project_id: int,
         task_id: int,
         assignee_id: int,
-    ) -> Task:
+        expected_version: int,
+        idempotency_key: str,
+    ) -> MCPMutationResult[Task]:
         await self._require_principal_business(session, principal)
-        task = await self._tasks.get_active(
+        tool_name = "assign_task"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "assignee_id": assignee_id,
+                "expected_version": expected_version,
+            },
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="task"
+        )
+        task: Task | None
+        if replay is not None:
+            task = self._task_from_snapshot(replay)
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task.id,
+                outcome="idempotent_replay",
+            )
+            await session.commit()
+            return MCPMutationResult(entity=task, replayed=True)
+        task = await self._tasks.get_active_for_update(
             session, principal.business_id, project_id, task_id
         )
         if task is None:
+            await session.rollback()
             await self._audit_task_not_found(
-                session, principal, "assign_task", task_id
+                session, principal, tool_name, task_id
             )
             raise TaskNotFoundError("Task not found")
-        await self._validate_assignee(
-            session, principal.business_id, assignee_id
-        )
+        if task.version != expected_version:
+            current_version = task.version
+            await session.rollback()
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task_id,
+                outcome="version_conflict",
+            )
+            await session.commit()
+            raise MutationVersionConflictError(
+                f"Task version conflict: expected {expected_version}, current {current_version}"
+            )
+        try:
+            await self._validate_assignee(
+                session, principal.business_id, assignee_id
+            )
+        except AssigneeNotFoundError:
+            await session.rollback()
+            self._audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="task",
+                target_id=task_id,
+                outcome="invalid_assignee",
+            )
+            await session.commit()
+            raise
         task.assignee_id = assignee_id
+        task.version += 1
+        await session.flush()
+        self._idempotency.complete(
+            claim.record,
+            result_type="task",
+            result_id=task.id,
+            response_body=self._task_snapshot(task),
+        )
         self._audit.add(
             session,
             principal=principal,
-            tool_name="assign_task",
+            tool_name=tool_name,
             target_type="task",
             target_id=task.id,
             outcome="success",
         )
+        await self._enqueue_task_sync(session, principal.business_id, task)
         await session.commit()
-        return task
+        return MCPMutationResult(entity=task, replayed=False)
 
     async def _audit_task_not_found(
         self,
@@ -561,6 +836,11 @@ class TaskManager:
             ):
                 raise TypeError
             assignee_id = assignee_id_value
+            version_value = snapshot["version"]
+            if not isinstance(version_value, int) or isinstance(version_value, bool):
+                raise TypeError
+            source_document_id = snapshot.get("source_document_id")
+            source_candidate_id = snapshot.get("source_candidate_id")
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("Stored task idempotency result is invalid") from exc
         return Task(
@@ -572,4 +852,26 @@ class TaskManager:
             project_id=project_id,
             assignee_id=assignee_id,
             created_by=TaskSource.MCP,
+            source_document_id=(
+                source_document_id if isinstance(source_document_id, int) else None
+            ),
+            source_candidate_id=(
+                source_candidate_id if isinstance(source_candidate_id, int) else None
+            ),
+            version=version_value,
         )
+
+    @staticmethod
+    def _task_snapshot(task: Task) -> dict[str, object]:
+        return {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status.value,
+            "priority": task.priority.value,
+            "project_id": task.project_id,
+            "assignee_id": task.assignee_id,
+            "source_document_id": task.source_document_id,
+            "source_candidate_id": task.source_candidate_id,
+            "version": task.version,
+        }

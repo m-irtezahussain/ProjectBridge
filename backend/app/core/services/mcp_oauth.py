@@ -23,6 +23,7 @@ MCP_SCOPES = frozenset(
         "documents:write",
         "search:read",
         "search:write",
+        "audit:read",
         "offline_access",
     }
 )

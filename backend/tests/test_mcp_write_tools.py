@@ -43,6 +43,7 @@ class FakeProjects:
                 description=data.description,
                 business_id=principal.business_id,
                 status=data.status,
+                version=1,
             ),
             replayed=False,
         )
@@ -53,17 +54,25 @@ class FakeProjects:
         principal: MCPPrincipal,
         project_id: int,
         data: ProjectUpdate,
-    ) -> Project:
-        return Project(
+        _expected_version: int,
+        _idempotency_key: str,
+    ) -> MCPMutationResult[Project]:
+        return MCPMutationResult(entity=Project(
             id=project_id,
             name=data.name or "Client Portal",
             description=data.description,
             business_id=principal.business_id,
             status=data.status or ProjectStatus.PLANNING,
-        )
+            version=2,
+        ), replayed=False)
 
     async def archive_project_for_principal(
-        self, _session: object, _principal: MCPPrincipal, _project_id: int
+        self,
+        _session: object,
+        _principal: MCPPrincipal,
+        _project_id: int,
+        _expected_version: int,
+        _idempotency_key: str,
     ) -> bool:
         replayed = self.archived
         self.archived = True
@@ -91,6 +100,7 @@ class FakeTasks:
                 priority=data.priority,
                 project_id=project_id,
                 created_by=TaskSource.MCP,
+                version=1,
             ),
             replayed=False,
         )
@@ -102,8 +112,10 @@ class FakeTasks:
         project_id: int,
         task_id: int,
         data: TaskUpdate,
-    ) -> Task:
-        return Task(
+        _expected_version: int,
+        _idempotency_key: str,
+    ) -> MCPMutationResult[Task]:
+        return MCPMutationResult(entity=Task(
             id=task_id,
             title=data.title or "Prepare release",
             description=data.description,
@@ -112,7 +124,8 @@ class FakeTasks:
             project_id=project_id,
             assignee_id=data.assignee_id,
             created_by=TaskSource.MCP,
-        )
+            version=2,
+        ), replayed=False)
 
     async def archive_task_for_principal(
         self,
@@ -120,6 +133,8 @@ class FakeTasks:
         _principal: MCPPrincipal,
         _project_id: int,
         _task_id: int,
+        _expected_version: int,
+        _idempotency_key: str,
     ) -> bool:
         replayed = self.archived
         self.archived = True
@@ -132,8 +147,10 @@ class FakeTasks:
         project_id: int,
         task_id: int,
         assignee_id: int,
-    ) -> Task:
-        return Task(
+        _expected_version: int,
+        _idempotency_key: str,
+    ) -> MCPMutationResult[Task]:
+        return MCPMutationResult(entity=Task(
             id=task_id,
             title="Prepare release",
             status=TaskStatus.TODO,
@@ -141,7 +158,8 @@ class FakeTasks:
             project_id=project_id,
             assignee_id=assignee_id,
             created_by=TaskSource.MCP,
-        )
+            version=3,
+        ), replayed=False)
 
 
 @pytest.mark.asyncio
@@ -178,10 +196,24 @@ async def test_write_tools_return_typed_results_and_archive(
         )
         updated_project = await client.call_tool(
             "update_project",
-            {"input": {"project_id": 4, "status": "Completed"}},
+            {
+                "input": {
+                    "project_id": 4,
+                    "status": "Completed",
+                    "expected_version": 1,
+                    "idempotency_key": "update-project-key",
+                }
+            },
         )
         archived_project = await client.call_tool(
-            "archive_project", {"input": {"project_id": 4}}
+            "archive_project",
+            {
+                "input": {
+                    "project_id": 4,
+                    "expected_version": 2,
+                    "idempotency_key": "archive-project-key",
+                }
+            },
         )
         task = await client.call_tool(
             "create_task",
@@ -201,16 +233,33 @@ async def test_write_tools_return_typed_results_and_archive(
                     "project_id": 4,
                     "task_id": 8,
                     "status": "done",
+                        "expected_version": 1,
+                        "idempotency_key": "update-task-key",
                 }
             },
         )
         assigned_task = await client.call_tool(
             "assign_task",
-            {"input": {"project_id": 4, "task_id": 8, "assignee_id": 7}},
+            {
+                "input": {
+                    "project_id": 4,
+                    "task_id": 8,
+                    "assignee_id": 7,
+                    "expected_version": 2,
+                    "idempotency_key": "assign-task-key",
+                }
+            },
         )
         archived = await client.call_tool(
             "archive_task",
-            {"input": {"project_id": 4, "task_id": 8}},
+            {
+                "input": {
+                    "project_id": 4,
+                    "task_id": 8,
+                    "expected_version": 3,
+                    "idempotency_key": "archive-task-key",
+                }
+            },
         )
         missing_key = await client.call_tool(
             "create_project",
@@ -224,10 +273,10 @@ async def test_write_tools_return_typed_results_and_archive(
     assert project.is_error is False
     assert project.structured_content["project"]["id"] == 4
     assert project.structured_content["replayed"] is False
-    assert updated_project.structured_content["status"] == "Completed"
+    assert updated_project.structured_content["project"]["status"] == "Completed"
     assert task.structured_content["task"]["priority"] == "high"
-    assert updated_task.structured_content["status"] == "done"
-    assert assigned_task.structured_content["assignee_id"] == 7
+    assert updated_task.structured_content["task"]["status"] == "done"
+    assert assigned_task.structured_content["task"]["assignee_id"] == 7
     assert archived_project.structured_content == {
         "project_id": 4,
         "archived": True,

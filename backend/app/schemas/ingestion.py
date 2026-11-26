@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.ingestion import CandidateStatus, IngestionStatus, StageStatus
 from app.models.provenance import ActionOrigin
@@ -10,6 +10,14 @@ class StartIngestionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     document_id: int = Field(gt=0)
     project_id: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
 
 class IngestionRunSummary(BaseModel):
@@ -31,6 +39,7 @@ class IngestionRunSummary(BaseModel):
     last_error_message: str | None
     next_attempt_at: datetime
     completed_at: datetime | None
+    version: int
 
 
 class TaskCandidateSummary(BaseModel):
@@ -63,6 +72,15 @@ class ConfirmCandidatesInput(BaseModel):
     ingestion_run_id: int = Field(gt=0)
     approved_candidate_ids: list[int] = Field(default_factory=list, max_length=200)
     rejected_candidate_ids: list[int] = Field(default_factory=list, max_length=200)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
     @model_validator(mode="after")
     def validate_decisions(self) -> "ConfirmCandidatesInput":
@@ -80,3 +98,12 @@ class ConfirmCandidatesInput(BaseModel):
 class RetryIngestionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ingestion_run_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value

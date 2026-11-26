@@ -1,4 +1,5 @@
 from app.core.managers.accounts import AccountManager
+from app.core.managers.audit import AuditManager
 from app.core.managers.auth import AuthManager
 from app.core.managers.documents import DocumentManager
 from app.core.managers.ingestion import IngestionManager
@@ -10,6 +11,7 @@ from app.core.managers.tasks import TaskManager
 
 __all__ = [
     "AccountManager",
+    "AuditManager",
     "AuthManager",
     "DocumentManager",
     "IngestionManager",

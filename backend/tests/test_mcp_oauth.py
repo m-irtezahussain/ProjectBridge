@@ -1,7 +1,7 @@
 import base64
 import hashlib
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -145,6 +145,7 @@ def test_pkce_and_redirect_validation_reject_unsafe_values() -> None:
 async def test_authorization_code_is_single_use_and_refresh_reuse_revokes_grant() -> None:
     manager, oauth = make_manager()
     session = AsyncMock()
+    session.add = MagicMock()
     registration = await manager.register_client(
         session,
         OAuthClientRegistrationRequest(

@@ -5,10 +5,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.services.audit import AuditService
 from app.core.services.passwords import password_service
 from app.core.services.refresh_tokens import RefreshTokenService
 from app.core.services.tokens import InvalidTokenError, TokenPurpose, TokenService
-from app.models import Business, User
+from app.models import ActionOrigin, Business, User
 from app.repositories.businesses import BusinessRepository
 from app.repositories.refresh_tokens import RefreshTokenRepository
 from app.repositories.users import UserRepository
@@ -45,12 +46,14 @@ class AuthManager:
         users: UserRepository | None = None,
         businesses: BusinessRepository | None = None,
         refresh_tokens: RefreshTokenRepository | None = None,
+        audit: AuditService | None = None,
     ) -> None:
         self._tokens = token_service
         self._refresh_token_service = refresh_token_service
         self._users = users or UserRepository()
         self._businesses = businesses or BusinessRepository()
         self._refresh_tokens = refresh_tokens or RefreshTokenRepository()
+        self._audit = audit or AuditService()
         self._dummy_password_hash = password_service.hash_password(
             "projectbridge dummy password for timing"
         )
@@ -97,6 +100,21 @@ class AuthManager:
         password_hash = user.password_hash if user is not None else self._dummy_password_hash
         password_matches = password_service.verify_password(password, password_hash)
         if user is None or not password_matches:
+            if user is not None:
+                business = await self._businesses.get_for_owner(session, user.id)
+                if business is not None:
+                    self._audit.record(
+                        session,
+                        business_id=business.id,
+                        actor_user_id=user.id,
+                        interface=ActionOrigin.REST,
+                        action="auth.login",
+                        target_type="user",
+                        target_id=user.id,
+                        outcome="denied",
+                        details={"reason": "invalid_credentials"},
+                    )
+                    await session.commit()
             raise AuthenticationError("Invalid email or password")
 
         now = datetime.now(UTC)
@@ -105,6 +123,18 @@ class AuthManager:
         self._refresh_tokens.add(session, issued_refresh.record)
         token = self._tokens.issue(user.id, "access")
         user.access_token = token
+        business = await self._businesses.get_for_owner(session, user.id)
+        if business is not None:
+            self._audit.record(
+                session,
+                business_id=business.id,
+                actor_user_id=user.id,
+                interface=ActionOrigin.REST,
+                action="auth.login",
+                target_type="user",
+                target_id=user.id,
+                outcome="success",
+            )
         await session.commit()
         return AuthResult(
             token=token,
@@ -250,14 +280,40 @@ class AuthManager:
             user = await self.get_user(session, onboarding_token, "onboarding")
         if user is None:
             raise AuthenticationError("Authentication required")
-        if user.has_business or await self._businesses.get_for_owner(session, user.id):
+        existing_business = await self._businesses.get_for_owner(session, user.id)
+        if user.has_business or existing_business is not None:
+            if existing_business is not None:
+                self._audit.record(
+                    session,
+                    business_id=existing_business.id,
+                    actor_user_id=user.id,
+                    interface=ActionOrigin.REST,
+                    action="business.register",
+                    target_type="business",
+                    target_id=existing_business.id,
+                    outcome="conflict",
+                )
+                await session.commit()
             raise BusinessAlreadyRegisteredError("Business is already registered")
 
         business = Business(name=data.name, owned_by=user.id)
         self._businesses.add(session, business)
-        await self._refresh_tokens.revoke_user(session, user.id, datetime.now(UTC))
-        user.access_token = None
         try:
+            await session.flush()
+            self._audit.record(
+                session,
+                business_id=business.id,
+                actor_user_id=user.id,
+                interface=ActionOrigin.REST,
+                action="business.register",
+                target_type="business",
+                target_id=business.id,
+                outcome="success",
+            )
+            await self._refresh_tokens.revoke_user(
+                session, user.id, datetime.now(UTC)
+            )
+            user.access_token = None
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()
@@ -292,5 +348,17 @@ class AuthManager:
                 session, user.id, datetime.now(UTC)
             )
             user.access_token = None
+            business = await self._businesses.get_for_owner(session, user.id)
+            if business is not None:
+                self._audit.record(
+                    session,
+                    business_id=business.id,
+                    actor_user_id=user.id,
+                    interface=ActionOrigin.REST,
+                    action="auth.logout",
+                    target_type="user",
+                    target_id=user.id,
+                    outcome="success",
+                )
         if user is not None or refresh_record is not None:
             await session.commit()

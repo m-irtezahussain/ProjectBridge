@@ -1,5 +1,6 @@
 """ORM model registry used by the application and Alembic."""
 
+from app.models.audit import AuditEvent
 from app.models.auth_rate_limit import AuthRateLimit
 from app.models.base import Base
 from app.models.business import Business
@@ -30,6 +31,7 @@ from app.models.user import User
 
 __all__ = [
     "AuthRateLimit",
+    "AuditEvent",
     "Base",
     "Business",
     "Document",

@@ -65,6 +65,45 @@ class TaskRepository:
             )
         )
 
+    async def get_active_for_update(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        project_id: int,
+        task_id: int,
+    ) -> Task | None:
+        return await session.scalar(
+            select(Task)
+            .join(Project, Task.project_id == Project.id)
+            .where(
+                Task.id == task_id,
+                Task.project_id == project_id,
+                Task.is_deleted.is_(False),
+                Project.business_id == business_id,
+                Project.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+
+    async def get_for_project_for_update(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        project_id: int,
+        task_id: int,
+    ) -> Task | None:
+        return await session.scalar(
+            select(Task)
+            .join(Project, Task.project_id == Project.id)
+            .where(
+                Task.id == task_id,
+                Task.project_id == project_id,
+                Project.business_id == business_id,
+                Project.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+
     async def get_for_project(
         self,
         session: AsyncSession,

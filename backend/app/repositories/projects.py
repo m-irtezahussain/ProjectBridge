@@ -33,6 +33,31 @@ class ProjectRepository:
             )
         )
 
+    async def get_active_for_update(
+        self, session: AsyncSession, business_id: int, project_id: int
+    ) -> Project | None:
+        return await session.scalar(
+            select(Project)
+            .where(
+                Project.id == project_id,
+                Project.business_id == business_id,
+                Project.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+
+    async def get_for_business_for_update(
+        self, session: AsyncSession, business_id: int, project_id: int
+    ) -> Project | None:
+        return await session.scalar(
+            select(Project)
+            .where(
+                Project.id == project_id,
+                Project.business_id == business_id,
+            )
+            .with_for_update()
+        )
+
     async def get_for_business(
         self, session: AsyncSession, business_id: int, project_id: int
     ) -> Project | None:

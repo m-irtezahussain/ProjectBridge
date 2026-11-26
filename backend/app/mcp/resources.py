@@ -55,6 +55,7 @@ def _project(project: Project) -> CompactProjectResource:
         id=project.id,
         name=project.name,
         status=project.status.value,
+        version=project.version,
         description_excerpt=(project.description[:500] if project.description else None),
         links=[
             ResourceLink(rel="tasks", uri=f"{uri}/tasks?limit=50"),
@@ -88,6 +89,7 @@ def _task(task: Task) -> CompactTaskResource:
         description_excerpt=(task.description[:500] if task.description else None),
         status=task.status.value,
         priority=task.priority.value,
+        version=task.version,
         assignee_id=task.assignee_id,
         source_document_id=task.source_document_id,
         links=links,
@@ -109,6 +111,7 @@ def _document(document: Document) -> CompactDocumentResource:
         project_id=document.project_id,
         filename=document.original_filename,
         status=document.status.value,
+        version=document.version,
         mime_type=document.detected_mime_type or document.declared_mime_type,
         size_bytes=document.size_bytes,
         content_sha256=document.content_sha256,
@@ -197,6 +200,7 @@ def register_context_resources(
                 "projects": "projects:read",
                 "tasks": "tasks:read",
                 "documents": "documents:read",
+                "audit_events": "audit:read",
             },
             templates=[
                 {"name": "project", "uri": "projectbridge://projects/{project_id}"},

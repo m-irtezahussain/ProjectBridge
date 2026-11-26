@@ -7,11 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
+from app.core.services.audit import AuditService
 from app.core.services.embeddings import EmbeddingService
 from app.core.services.knowledge_text import normalize_knowledge_text
 from app.core.services.mcp_auth import MCPPrincipal
 from app.core.services.vector_store import ChromaVectorStore, VectorHit, VectorRecord
 from app.models import (
+    ActionOrigin,
     Business,
     SearchIndexJob,
     SearchJobOperation,
@@ -53,6 +55,7 @@ class SemanticSearchManager:
         projects: ProjectRepository | None = None,
         documents: DocumentRepository | None = None,
         search: SearchRepository | None = None,
+        audit: AuditService | None = None,
     ) -> None:
         self._embeddings = embeddings
         self._vectors = vectors
@@ -61,6 +64,7 @@ class SemanticSearchManager:
         self._projects = projects or ProjectRepository()
         self._documents = documents or DocumentRepository()
         self._search = search or SearchRepository()
+        self._audit = audit or AuditService()
 
     async def _require_business(
         self, session: AsyncSession, principal: MCPPrincipal
@@ -116,6 +120,21 @@ class SemanticSearchManager:
             )
             if hit is not None:
                 hits.append(hit)
+        self._audit.record(
+            session,
+            business_id=principal.business_id,
+            actor_user_id=principal.user_id,
+            interface=ActionOrigin.MCP,
+            action="knowledge.search",
+            target_type="project" if project_id is not None else "business",
+            target_id=project_id or principal.business_id,
+            outcome="success",
+            details={
+                "document_id": document_id,
+                "result_count": len(hits),
+            },
+        )
+        await session.commit()
         return hits
 
     async def enqueue_project_reindex(
@@ -136,6 +155,16 @@ class SemanticSearchManager:
             project_id=project_id,
             operation=SearchJobOperation.REINDEX_PROJECT,
             max_attempts=self._settings.rag_max_attempts,
+        )
+        self._audit.record(
+            session,
+            business_id=principal.business_id,
+            actor_user_id=principal.user_id,
+            interface=ActionOrigin.MCP,
+            action="knowledge.reindex",
+            target_type="project",
+            target_id=project_id,
+            outcome="queued",
         )
         await session.commit()
         return job
@@ -186,11 +215,13 @@ class SearchIndexingManager:
         embeddings: EmbeddingService,
         vectors: ChromaVectorStore,
         search: SearchRepository | None = None,
+        audit: AuditService | None = None,
     ) -> None:
         self._settings = settings
         self._embeddings = embeddings
         self._vectors = vectors
         self._search = search or SearchRepository()
+        self._audit = audit or AuditService()
 
     async def process_claimed(
         self, session: AsyncSession, job: SearchIndexJob
@@ -203,6 +234,7 @@ class SearchIndexingManager:
             job.error_message = None
             job.locked_at = None
             job.worker_id = None
+            self._record_job_audit(session, job, "success")
             await session.commit()
         except Exception as error:
             job.error_code = type(error).__name__
@@ -216,7 +248,31 @@ class SearchIndexingManager:
                 )
             else:
                 job.status = SearchJobStatus.FAILED
+            self._record_job_audit(session, job, job.status.value)
             await session.commit()
+
+    def _record_job_audit(
+        self, session: AsyncSession, job: SearchIndexJob, outcome: str
+    ) -> None:
+        target_type = "project"
+        target_id = job.project_id
+        if job.document_id is not None:
+            target_type = "document"
+            target_id = job.document_id
+        elif job.task_id is not None:
+            target_type = "task"
+            target_id = job.task_id
+        self._audit.record(
+            session,
+            business_id=job.business_id,
+            actor_user_id=None,
+            interface=ActionOrigin.WORKER,
+            action=f"knowledge_index.{job.operation.value}",
+            target_type=target_type,
+            target_id=target_id,
+            outcome=outcome,
+            details={"job_id": job.id, "error_code": job.error_code},
+        )
 
     async def _dispatch(self, session: AsyncSession, job: SearchIndexJob) -> None:
         if job.operation is SearchJobOperation.UPSERT_DOCUMENT:

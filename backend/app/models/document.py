@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     func,
     text,
@@ -45,6 +46,7 @@ class Document(Base):
             "size_bytes IS NULL OR size_bytes > 0",
             name="ck_documents_size_bytes_positive",
         ),
+        CheckConstraint("version > 0", name="ck_documents_version_positive"),
         Index(
             "ix_documents_business_active_id_desc",
             "business_id",
@@ -118,6 +120,10 @@ class Document(Base):
         onupdate=func.now(),
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    __mapper_args__ = {"version_id_col": version}
 
     project: Mapped[Project | None] = relationship(
         back_populates="documents", lazy="raise"

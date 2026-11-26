@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -97,6 +97,7 @@ def make_manager() -> tuple[AuthManager, FakeUsers, FakeRefreshTokens]:
 async def test_signup_business_registration_and_login_navigation() -> None:
     manager, users, _refresh_tokens = make_manager()
     session = AsyncMock()
+    session.add = MagicMock()
     signup = await manager.signup(
         session,
         UserCreate(

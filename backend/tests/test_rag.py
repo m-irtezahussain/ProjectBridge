@@ -1,5 +1,4 @@
 import json
-from typing import cast
 from unittest.mock import AsyncMock
 
 import httpx
@@ -184,7 +183,7 @@ async def test_search_manager_rejects_cross_business_hits_and_labels_injection()
     )
 
     hits = await manager.search(
-        cast(AsyncSession, object()),
+        AsyncMock(spec=AsyncSession),
         principal,
         "launch",
         project_id=None,

@@ -2,6 +2,7 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -10,6 +11,12 @@ from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundErr
 from app.core.services.document_storage import DocumentStorage
 from app.core.services.knowledge_text import chunk_knowledge_text
 from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_mutations import (
+    MCPMutationResult,
+    MutationVersionConflictError,
+    completed_idempotency_replay,
+    request_fingerprint,
+)
 from app.core.services.ocr import OCRProvider
 from app.core.services.task_extraction import SafeTaskCandidateExtractor
 from app.models import (
@@ -32,7 +39,7 @@ from app.models import (
 from app.repositories.businesses import BusinessRepository
 from app.repositories.documents import DocumentRepository
 from app.repositories.ingestion import IngestionRepository
-from app.repositories.mcp_operations import MCPAuditRepository
+from app.repositories.mcp_operations import MCPAuditRepository, MCPIdempotencyRepository
 from app.repositories.projects import ProjectRepository
 from app.repositories.search import SearchRepository
 from app.repositories.tasks import TaskRepository
@@ -62,6 +69,7 @@ class IngestionManager:
         audit: MCPAuditRepository | None = None,
         extractor: SafeTaskCandidateExtractor | None = None,
         search: SearchRepository | None = None,
+        idempotency: MCPIdempotencyRepository | None = None,
     ) -> None:
         self._settings = settings
         self._storage = storage
@@ -74,6 +82,7 @@ class IngestionManager:
         self._audit = audit or MCPAuditRepository()
         self._extractor = extractor or SafeTaskCandidateExtractor()
         self._search = search or SearchRepository()
+        self._idempotency = idempotency or MCPIdempotencyRepository()
 
     async def _require_business(
         self, session: AsyncSession, principal: MCPPrincipal
@@ -89,7 +98,8 @@ class IngestionManager:
         principal: MCPPrincipal,
         document_id: int,
         project_id: int,
-    ) -> IngestionRun:
+        idempotency_key: str,
+    ) -> MCPMutationResult[IngestionRun]:
         await self._require_business(session, principal)
         document = await self._documents.get(session, principal.business_id, document_id)
         if document is None:
@@ -101,15 +111,46 @@ class IngestionManager:
         )
         if project is None:
             raise ProjectNotFoundError("Project not found")
+        tool_name = "start_document_ingestion"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {"document_id": document_id, "project_id": project_id},
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="ingestion_run"
+        )
+        if replay is not None:
+            run = await self._ingestion.get_run(
+                session, principal.business_id, claim.record.result_id or 0
+            )
+            if run is None:
+                raise RuntimeError("Stored ingestion idempotency result is invalid")
+            await session.commit()
+            return MCPMutationResult(entity=run, replayed=True)
         active = await self._ingestion.get_active_for_document(
             session, principal.business_id, document_id
         )
         if active is not None:
             if active.project_id != project_id:
+                await session.rollback()
                 raise IngestionConflictError(
                     "Document already has an active ingestion for another project"
                 )
-            return active
+            self._idempotency.complete(
+                claim.record,
+                result_type="ingestion_run",
+                result_id=active.id,
+                response_body={"id": active.id, "version": active.version},
+            )
+            await session.commit()
+            return MCPMutationResult(entity=active, replayed=True)
         run = IngestionRun(
             document_id=document_id,
             business_id=principal.business_id,
@@ -125,9 +166,33 @@ class IngestionManager:
             attempts=0,
             max_attempts=self._settings.ocr_max_attempts,
             next_attempt_at=datetime.now(UTC),
+            version=1,
         )
         self._ingestion.add_run(session, run)
-        await session.flush()
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            active = await self._ingestion.get_active_for_document(
+                session, principal.business_id, document_id
+            )
+            if active is None or active.project_id != project_id:
+                raise
+            recovered_claim = await self._idempotency.claim(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+            )
+            self._idempotency.complete(
+                recovered_claim.record,
+                result_type="ingestion_run",
+                result_id=active.id,
+                response_body={"id": active.id, "version": active.version},
+            )
+            await session.commit()
+            return MCPMutationResult(entity=active, replayed=True)
         self._add_event(
             session,
             run,
@@ -144,8 +209,14 @@ class IngestionManager:
             target_id=run.id,
             outcome="queued",
         )
+        self._idempotency.complete(
+            claim.record,
+            result_type="ingestion_run",
+            result_id=run.id,
+            response_body={"id": run.id, "version": run.version},
+        )
         await session.commit()
-        return run
+        return MCPMutationResult(entity=run, replayed=False)
 
     async def get_run(
         self, session: AsyncSession, principal: MCPPrincipal, run_id: int
@@ -172,13 +243,60 @@ class IngestionManager:
         run_id: int,
         approved_ids: list[int],
         rejected_ids: list[int],
-    ) -> IngestionRun:
-        run, candidates = await self.list_candidates(session, principal, run_id)
+        expected_version: int,
+        idempotency_key: str,
+    ) -> MCPMutationResult[IngestionRun]:
+        await self._require_business(session, principal)
+        tool_name = "confirm_task_candidates"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {
+                "ingestion_run_id": run_id,
+                "expected_version": expected_version,
+                "approved_candidate_ids": sorted(approved_ids),
+                "rejected_candidate_ids": sorted(rejected_ids),
+            },
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="ingestion_run"
+        )
+        if replay is not None:
+            run = await self._ingestion.get_run(
+                session, principal.business_id, claim.record.result_id or 0
+            )
+            if run is None:
+                raise RuntimeError("Stored ingestion idempotency result is invalid")
+            await session.commit()
+            return MCPMutationResult(entity=run, replayed=True)
+        run = await self._ingestion.get_run_for_update(
+            session, principal.business_id, run_id
+        )
+        if run is None:
+            await session.rollback()
+            raise IngestionNotFoundError("Ingestion run not found")
+        if run.version != expected_version:
+            await session.rollback()
+            raise MutationVersionConflictError(
+                f"Ingestion version conflict: expected {expected_version}, "
+                f"current {run.version}"
+            )
+        candidates = await self._ingestion.list_candidates(
+            session, principal.business_id, run_id
+        )
         if run.status is not IngestionStatus.AWAITING_CONFIRMATION:
+            await session.rollback()
             raise IngestionConflictError("Ingestion is not awaiting confirmation")
         pending = {item.id: item for item in candidates if item.status is CandidateStatus.PENDING}
         decisions = set(approved_ids) | set(rejected_ids)
         if decisions != set(pending):
+            await session.rollback()
             raise IngestionConflictError(
                 "Every pending candidate must be explicitly approved or rejected"
             )
@@ -191,6 +309,7 @@ class IngestionManager:
         run.next_attempt_at = datetime.now(UTC)
         run.locked_at = None
         run.worker_id = None
+        run.version += 1
         self._add_event(
             session,
             run,
@@ -211,24 +330,72 @@ class IngestionManager:
             target_id=run.id,
             outcome="confirmed",
         )
+        self._idempotency.complete(
+            claim.record,
+            result_type="ingestion_run",
+            result_id=run.id,
+            response_body={"id": run.id, "version": run.version},
+        )
         await session.commit()
-        return run
+        return MCPMutationResult(entity=run, replayed=False)
 
     async def retry(
-        self, session: AsyncSession, principal: MCPPrincipal, run_id: int
-    ) -> IngestionRun:
-        run = await self.get_run(session, principal, run_id)
+        self,
+        session: AsyncSession,
+        principal: MCPPrincipal,
+        run_id: int,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> MCPMutationResult[IngestionRun]:
+        await self._require_business(session, principal)
+        tool_name = "retry_document_ingestion"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {"ingestion_run_id": run_id, "expected_version": expected_version},
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="ingestion_run"
+        )
+        if replay is not None:
+            run = await self._ingestion.get_run(
+                session, principal.business_id, claim.record.result_id or 0
+            )
+            if run is None:
+                raise RuntimeError("Stored ingestion idempotency result is invalid")
+            await session.commit()
+            return MCPMutationResult(entity=run, replayed=True)
+        run = await self._ingestion.get_run_for_update(
+            session, principal.business_id, run_id
+        )
+        if run is None:
+            await session.rollback()
+            raise IngestionNotFoundError("Ingestion run not found")
+        if run.version != expected_version:
+            await session.rollback()
+            raise MutationVersionConflictError(
+                f"Ingestion version conflict: expected {expected_version}, "
+                f"current {run.version}"
+            )
         if run.status not in {
             IngestionStatus.FAILED,
             IngestionStatus.PARTIAL_FAILURE,
             IngestionStatus.RETRY_SCHEDULED,
         }:
+            await session.rollback()
             raise IngestionConflictError("Ingestion is not retryable")
         run.status = IngestionStatus.QUEUED
         run.attempts = 0
         run.next_attempt_at = datetime.now(UTC)
         run.locked_at = None
         run.worker_id = None
+        run.version += 1
         candidates = await self._ingestion.list_candidates(
             session, principal.business_id, run.id
         )
@@ -247,8 +414,14 @@ class IngestionManager:
             origin=ActionOrigin.MCP,
             actor_user_id=principal.user_id,
         )
+        self._idempotency.complete(
+            claim.record,
+            result_type="ingestion_run",
+            result_id=run.id,
+            response_body={"id": run.id, "version": run.version},
+        )
         await session.commit()
-        return run
+        return MCPMutationResult(entity=run, replayed=False)
 
     async def process_claimed(self, session: AsyncSession, run: IngestionRun) -> None:
         try:
@@ -368,6 +541,11 @@ class IngestionManager:
                         business_id=run.business_id,
                         project_id=run.project_id,
                         title=extracted.title,
+                        dedupe_key=self._extractor.dedupe_key(
+                            title=extracted.title,
+                            source_excerpt=extracted.source_excerpt,
+                            source_line_start=extracted.source_line_start,
+                        ),
                         source_excerpt=extracted.source_excerpt,
                         source_line_start=extracted.source_line_start,
                         source_line_end=extracted.source_line_end,
@@ -560,6 +738,22 @@ class IngestionManager:
         stage: str | None = None,
         details: dict[str, object] | None = None,
     ) -> None:
+        audit_details = dict(details or {})
+        if stage is not None:
+            audit_details["stage"] = stage
+        if origin is ActionOrigin.WORKER and run.worker_id is not None:
+            audit_details["worker_id"] = run.worker_id
+        self._audit.record(
+            session,
+            business_id=run.business_id,
+            actor_user_id=actor_user_id or run.requested_by_user_id,
+            interface=origin,
+            action=f"ingestion.{action}",
+            target_type="ingestion_run",
+            target_id=run.id,
+            outcome=outcome,
+            details=audit_details or None,
+        )
         self._ingestion.add_event(
             session,
             IngestionEvent(

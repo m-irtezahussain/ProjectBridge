@@ -5,6 +5,7 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.core.services.audit import AuditService
 from app.core.services.mcp_oauth import (
     ConsentClaims,
     MCPTokenService,
@@ -16,6 +17,7 @@ from app.core.services.mcp_oauth import (
     verify_pkce,
 )
 from app.models import (
+    ActionOrigin,
     OAuthAuthorizationCode,
     OAuthClient,
     OAuthGrant,
@@ -49,11 +51,13 @@ class OAuthManager:
         tokens: MCPTokenService,
         oauth: OAuthRepository | None = None,
         businesses: BusinessRepository | None = None,
+        audit: AuditService | None = None,
     ) -> None:
         self._settings = settings
         self._tokens = tokens
         self._oauth = oauth or OAuthRepository()
         self._businesses = businesses or BusinessRepository()
+        self._audit = audit or AuditService()
         self._code_lifetime = timedelta(
             minutes=settings.mcp_authorization_code_minutes
         )
@@ -153,7 +157,8 @@ class OAuthManager:
         user_id: int,
         request: ValidatedAuthorizationRequest,
     ) -> str:
-        if await self._businesses.get_for_owner(session, user_id) is None:
+        business = await self._businesses.get_for_owner(session, user_id)
+        if business is None:
             raise OAuthProtocolError(
                 "access_denied", "A registered business is required"
             )
@@ -175,6 +180,21 @@ class OAuthManager:
             expires_at=datetime.now(UTC) + self._code_lifetime,
         )
         self._oauth.add_grant_and_code(session, grant, code)
+        self._audit.record(
+            session,
+            business_id=business.id,
+            actor_user_id=user_id,
+            interface=ActionOrigin.REST,
+            action="permission.grant",
+            target_type="oauth_grant",
+            target_id=None,
+            outcome="success",
+            details={
+                "grant_id": grant.id,
+                "client_id": grant.client_id,
+                "scopes": grant.scopes.split(),
+            },
+        )
         await session.commit()
         return raw_code
 
@@ -281,6 +301,7 @@ class OAuthManager:
             grant = await self._oauth.get_grant(session, refresh.grant_id)
             if grant is not None and grant.client_id == client_id:
                 await self._oauth.revoke_grant(session, grant.id, now)
+                await self._audit_grant_revocation(session, grant)
                 await session.commit()
             return
         try:
@@ -288,8 +309,33 @@ class OAuthManager:
         except OAuthProtocolError:
             return
         if claims.client_id == client_id:
+            grant = await self._oauth.get_grant(session, claims.grant_id)
             await self._oauth.revoke_grant(session, claims.grant_id, now)
+            if grant is not None:
+                await self._audit_grant_revocation(session, grant)
             await session.commit()
+
+    async def _audit_grant_revocation(
+        self, session: AsyncSession, grant: OAuthGrant
+    ) -> None:
+        business = await self._businesses.get_for_owner(session, grant.user_id)
+        if business is None:
+            return
+        self._audit.record(
+            session,
+            business_id=business.id,
+            actor_user_id=grant.user_id,
+            interface=ActionOrigin.REST,
+            action="permission.revoke",
+            target_type="oauth_grant",
+            target_id=None,
+            outcome="success",
+            details={
+                "grant_id": grant.id,
+                "client_id": grant.client_id,
+                "scopes": grant.scopes.split(),
+            },
+        )
 
     def _issue_tokens(
         self,

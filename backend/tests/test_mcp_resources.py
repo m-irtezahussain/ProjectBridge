@@ -39,6 +39,7 @@ class FakeResources:
             name="Client Portal",
             description="Customer workspace",
             status=ProjectStatus.ACTIVE,
+            version=1,
         )
         self.task = Task(
             id=8,
@@ -48,6 +49,7 @@ class FakeResources:
             status=TaskStatus.TODO,
             priority=TaskPriority.HIGH,
             source_document_id=5,
+            version=1,
         )
         self.document = Document(
             id=5,
@@ -63,6 +65,7 @@ class FakeResources:
             quarantine_key="businesses/11/quarantine/5",
             status=DocumentStatus.AVAILABLE,
             upload_expires_at=datetime.now(UTC),
+            version=1,
         )
 
     async def get_project(self, *_args: object) -> Project:
@@ -110,6 +113,7 @@ class PagingProjects:
                 business_id=11,
                 name=f"Project {item_id}",
                 status=ProjectStatus.ACTIVE,
+                version=1,
             )
             for item_id in ids[:limit]
         ]

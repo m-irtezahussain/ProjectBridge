@@ -86,3 +86,4 @@ class TaskRead(BaseModel):
     project_id: int
     is_deleted: bool
     created_by: TaskSource
+    version: int

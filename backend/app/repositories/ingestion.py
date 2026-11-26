@@ -30,6 +30,18 @@ class IngestionRepository:
             )
         )
 
+    async def get_run_for_update(
+        self, session: AsyncSession, business_id: int, run_id: int
+    ) -> IngestionRun | None:
+        return await session.scalar(
+            select(IngestionRun)
+            .where(
+                IngestionRun.id == run_id,
+                IngestionRun.business_id == business_id,
+            )
+            .with_for_update()
+        )
+
     async def get_active_for_document(
         self, session: AsyncSession, business_id: int, document_id: int
     ) -> IngestionRun | None:

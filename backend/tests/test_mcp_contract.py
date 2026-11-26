@@ -41,6 +41,7 @@ async def test_status_tool_contract() -> None:
         "retry_document_ingestion",
         "search_project_knowledge",
         "reindex_project_knowledge",
+        "list_audit_events",
     ]
     tools = {tool.name: tool for tool in listed.tools}
     read_tools = {name: tools[name] for name in (

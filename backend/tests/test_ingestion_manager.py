@@ -7,9 +7,11 @@ from app.config import Settings
 from app.core.managers.ingestion import IngestionManager
 from app.core.services.document_storage import DownloadedObject
 from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_mutations import hash_idempotency_key
 from app.core.services.ocr import OCRError, OCRResult
 from app.core.services.task_extraction import SafeTaskCandidateExtractor
 from app.models import (
+    ActionOrigin,
     Business,
     CandidateStatus,
     Document,
@@ -17,12 +19,14 @@ from app.models import (
     DocumentText,
     IngestionRun,
     IngestionStatus,
+    MCPIdempotencyRecord,
     Project,
     ProjectStatus,
     StageStatus,
     Task,
     TaskCandidate,
 )
+from app.repositories.mcp_operations import IdempotencyClaim
 
 
 class FakeBusinesses:
@@ -127,6 +131,11 @@ class FakeIngestion:
         run = self.runs.get(run_id)
         return run if run is not None and run.business_id == business_id else None
 
+    async def get_run_for_update(
+        self, session: object, business_id: int, run_id: int
+    ) -> IngestionRun | None:
+        return await self.get_run(session, business_id, run_id)
+
     async def get_active_for_document(
         self, _session: object, business_id: int, document_id: int
     ) -> IngestionRun | None:
@@ -196,8 +205,64 @@ class FakeTasks:
 
 
 class FakeAudit:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
     def add(self, _session: object, **_kwargs: object) -> None:
         return None
+
+    def record(self, _session: object, **event: object) -> None:
+        self.records.append(event)
+
+
+class FakeIdempotency:
+    def __init__(self) -> None:
+        self.records: dict[tuple[int, str, str, str], MCPIdempotencyRecord] = {}
+
+    async def claim(
+        self,
+        _session: object,
+        *,
+        principal: MCPPrincipal,
+        tool_name: str,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> IdempotencyClaim:
+        scope = (
+            principal.business_id,
+            principal.grant_id,
+            tool_name,
+            hash_idempotency_key(idempotency_key),
+        )
+        record = self.records.get(scope)
+        if record is not None:
+            return IdempotencyClaim(record, is_new=False)
+        record = MCPIdempotencyRecord(
+            id=len(self.records) + 1,
+            business_id=principal.business_id,
+            user_id=principal.user_id,
+            grant_id=principal.grant_id,
+            tool_name=tool_name,
+            key_hash=scope[-1],
+            request_fingerprint=fingerprint,
+            state="started",
+        )
+        self.records[scope] = record
+        return IdempotencyClaim(record, is_new=True)
+
+    def complete(
+        self,
+        record: MCPIdempotencyRecord,
+        *,
+        result_type: str,
+        result_id: int,
+        response_body: dict[str, object],
+    ) -> None:
+        record.state = "completed"
+        record.result_type = result_type
+        record.result_id = result_id
+        record.response_body = response_body
+        record.completed_at = datetime.now(UTC)
 
 
 def principal() -> MCPPrincipal:
@@ -226,6 +291,7 @@ def make_manager(
         ingestion,  # type: ignore[arg-type]
         tasks,  # type: ignore[arg-type]
         FakeAudit(),  # type: ignore[arg-type]
+        idempotency=FakeIdempotency(),  # type: ignore[arg-type]
     )
     return manager, ingestion, tasks
 
@@ -242,7 +308,7 @@ def fake_session() -> AsyncMock:
 async def test_pipeline_requires_confirmation_and_links_created_tasks() -> None:
     manager, ingestion, tasks = make_manager(FakeOCR())
     session = fake_session()
-    run = await manager.start(session, principal(), 5, 3)
+    run = (await manager.start(session, principal(), 5, 3, "start-key")).entity
     run.status = IngestionStatus.PROCESSING
     run.attempts = 1
 
@@ -264,6 +330,8 @@ async def test_pipeline_requires_confirmation_and_links_created_tasks() -> None:
         run.id,
         [ingestion.candidates[0].id],
         [ingestion.candidates[1].id],
+        run.version,
+        "confirm-key",
     )
     run.status = IngestionStatus.PROCESSING
     run.attempts += 1
@@ -277,13 +345,32 @@ async def test_pipeline_requires_confirmation_and_links_created_tasks() -> None:
     assert ingestion.candidates[0].status is CandidateStatus.CREATED
     assert ingestion.candidates[1].status is CandidateStatus.REJECTED
     assert ingestion.chunks
+    assert len({candidate.dedupe_key for candidate in ingestion.candidates}) == 2
+    assert any(
+        event["action"] == "ingestion.ocr_completed"
+        and event["interface"] is ActionOrigin.WORKER
+        for event in manager._audit.records  # type: ignore[attr-defined]
+    )
+
+
+async def test_start_ingestion_replays_without_creating_a_duplicate_run() -> None:
+    manager, ingestion, _tasks = make_manager(FakeOCR())
+    session = fake_session()
+
+    first = await manager.start(session, principal(), 5, 3, "ingestion-key")
+    retry = await manager.start(session, principal(), 5, 3, "ingestion-key")
+
+    assert first.replayed is False
+    assert retry.replayed is True
+    assert retry.entity.id == first.entity.id
+    assert len(ingestion.runs) == 1
 
 
 async def test_ocr_failure_retries_from_durable_checkpoint() -> None:
     ocr = FakeOCR(failures=1)
     manager, ingestion, _tasks = make_manager(ocr)
     session = fake_session()
-    run = await manager.start(session, principal(), 5, 3)
+    run = (await manager.start(session, principal(), 5, 3, "start-key")).entity
     run.status = IngestionStatus.PROCESSING
     run.attempts = 1
 

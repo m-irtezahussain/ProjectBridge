@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -79,7 +79,9 @@ def make_manager() -> tuple[ProjectManager, FakeProjects, AsyncMock]:
         FakeBusinesses(business),  # type: ignore[arg-type]
         projects,  # type: ignore[arg-type]
     )
-    return manager, projects, AsyncMock()
+    session = AsyncMock()
+    session.add = MagicMock()
+    return manager, projects, session
 
 
 async def test_project_crud_and_soft_dismissal() -> None:

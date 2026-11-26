@@ -15,7 +15,16 @@ from app.core.services.document_storage import (
 )
 from app.core.services.document_validation import DocumentValidationError
 from app.core.services.mcp_auth import MCPPrincipal
-from app.models import Business, Document, DocumentStatus, Project, ProjectStatus
+from app.core.services.mcp_mutations import hash_idempotency_key
+from app.models import (
+    Business,
+    Document,
+    DocumentStatus,
+    MCPIdempotencyRecord,
+    Project,
+    ProjectStatus,
+)
+from app.repositories.mcp_operations import IdempotencyClaim
 from app.schemas.document import InitiateDocumentUploadInput
 from tests.test_document_validation import png_bytes
 
@@ -67,6 +76,21 @@ class FakeDocuments:
             return None
         return document
 
+    async def get_for_update(
+        self,
+        session: object,
+        business_id: int,
+        document_id: int,
+        *,
+        include_archived: bool = False,
+    ) -> Document | None:
+        return await self.get(
+            session,
+            business_id,
+            document_id,
+            include_archived=include_archived,
+        )
+
     async def find_by_hash(
         self,
         _session: object,
@@ -104,6 +128,56 @@ class FakeAudit:
 
     def add(self, _session: object, **event: object) -> None:
         self.events.append(event)
+
+
+class FakeIdempotency:
+    def __init__(self) -> None:
+        self.records: dict[tuple[int, str, str, str], MCPIdempotencyRecord] = {}
+
+    async def claim(
+        self,
+        _session: object,
+        *,
+        principal: MCPPrincipal,
+        tool_name: str,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> IdempotencyClaim:
+        scope = (
+            principal.business_id,
+            principal.grant_id,
+            tool_name,
+            hash_idempotency_key(idempotency_key),
+        )
+        record = self.records.get(scope)
+        if record is not None:
+            return IdempotencyClaim(record, is_new=False)
+        record = MCPIdempotencyRecord(
+            id=len(self.records) + 1,
+            business_id=principal.business_id,
+            user_id=principal.user_id,
+            grant_id=principal.grant_id,
+            tool_name=tool_name,
+            key_hash=scope[-1],
+            request_fingerprint=fingerprint,
+            state="started",
+        )
+        self.records[scope] = record
+        return IdempotencyClaim(record, is_new=True)
+
+    def complete(
+        self,
+        record: MCPIdempotencyRecord,
+        *,
+        result_type: str,
+        result_id: int,
+        response_body: dict[str, object],
+    ) -> None:
+        record.state = "completed"
+        record.result_type = result_type
+        record.result_id = result_id
+        record.response_body = response_body
+        record.completed_at = datetime.now(UTC)
 
 
 class FakeStorage:
@@ -187,6 +261,7 @@ def make_manager() -> tuple[DocumentManager, FakeDocuments, FakeStorage, FakeAud
         documents,  # type: ignore[arg-type]
         audit,  # type: ignore[arg-type]
         audit,  # type: ignore[arg-type]
+        idempotency=FakeIdempotency(),  # type: ignore[arg-type]
     )
     return manager, documents, storage, audit
 
@@ -279,8 +354,12 @@ async def test_tenant_isolation_and_idempotent_archive() -> None:
     with pytest.raises(DocumentNotFoundError):
         await manager.get_document(session, principal(), other_tenant.id)
 
-    first = await manager.archive_document(session, principal(), document.id)
-    replay = await manager.archive_document(session, principal(), document.id)
+    first = await manager.archive_document(
+        session, principal(), document.id, document.version, "archive-key"
+    )
+    replay = await manager.archive_document(
+        session, principal(), document.id, 1, "archive-key"
+    )
 
     assert first is False
     assert replay is True

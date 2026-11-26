@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
@@ -34,6 +34,7 @@ class Project(Base):
             "char_length(btrim(name)) BETWEEN 2 AND 200",
             name="ck_projects_name_length",
         ),
+        CheckConstraint("version > 0", name="ck_projects_version_positive"),
         Index(
             "ix_projects_business_active_id_desc",
             "business_id",
@@ -59,6 +60,10 @@ class Project(Base):
         default=ProjectStatus.PLANNING,
         server_default=ProjectStatus.PLANNING.value,
     )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    __mapper_args__ = {"version_id_col": version}
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )

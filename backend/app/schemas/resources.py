@@ -17,6 +17,7 @@ class CompactProjectResource(BaseModel):
     id: int
     name: str
     status: str
+    version: int
     description_excerpt: str | None
     links: list[ResourceLink]
 
@@ -31,6 +32,7 @@ class CompactTaskResource(BaseModel):
     description_excerpt: str | None
     status: str
     priority: str
+    version: int
     assignee_id: int | None
     source_document_id: int | None
     links: list[ResourceLink]
@@ -44,6 +46,7 @@ class CompactDocumentResource(BaseModel):
     project_id: int | None
     filename: str
     status: str
+    version: int
     mime_type: str
     size_bytes: int | None
     content_sha256: str | None

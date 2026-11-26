@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -110,7 +110,9 @@ def make_manager() -> tuple[TaskManager, FakeTasks, AsyncMock]:
         FakeProjects(project),  # type: ignore[arg-type]
         tasks,  # type: ignore[arg-type]
     )
-    return manager, tasks, AsyncMock()
+    session = AsyncMock()
+    session.add = MagicMock()
+    return manager, tasks, session
 
 
 async def test_task_crud_soft_deletion_and_api_source() -> None:

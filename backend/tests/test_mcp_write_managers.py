@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ from app.core.managers.tasks import AssigneeNotFoundError, TaskManager
 from app.core.services.mcp_auth import MCPPrincipal
 from app.core.services.mcp_mutations import (
     IdempotencyConflictError,
+    MutationVersionConflictError,
     hash_idempotency_key,
 )
 from app.models import (
@@ -63,6 +65,12 @@ class FakeProjects:
             return None
         return project
 
+    async def get_active_for_update(self, *args: object) -> Project | None:
+        return await self.get_active(*args)
+
+    async def get_for_business_for_update(self, *args: object) -> Project | None:
+        return await self.get_for_business(*args)
+
     def add(self, _session: object, project: Project) -> None:
         project.id = len(self.items) + 1
         self.items[project.id] = project
@@ -100,6 +108,12 @@ class FakeTasks:
         if business_id != 11 or task is None or task.project_id != project_id:
             return None
         return task
+
+    async def get_active_for_update(self, *args: object) -> Task | None:
+        return await self.get_active(*args)
+
+    async def get_for_project_for_update(self, *args: object) -> Task | None:
+        return await self.get_for_project(*args)
 
     def add(self, _session: object, task: Task) -> None:
         task.id = len(self.items) + 1
@@ -263,6 +277,31 @@ async def test_project_create_replays_and_rejects_key_mismatch() -> None:
     assert audit.events[-1]["outcome"] == "idempotency_conflict"
 
 
+async def test_concurrent_duplicate_create_requests_produce_one_project() -> None:
+    projects = FakeProjects()
+    manager = ProjectManager(
+        FakeAuth(),  # type: ignore[arg-type]
+        FakeBusinesses(),  # type: ignore[arg-type]
+        projects,  # type: ignore[arg-type]
+        FakeIdempotency(),  # type: ignore[arg-type]
+        FakeAudit(),  # type: ignore[arg-type]
+    )
+    data = ProjectCreate(name="Concurrent Portal", status=ProjectStatus.ACTIVE)
+
+    results = await asyncio.gather(
+        *(
+            manager.create_project_for_principal(
+                AsyncMock(), principal(), data, "same-concurrent-key"
+            )
+            for _ in range(20)
+        )
+    )
+
+    assert len(projects.items) == 1
+    assert sum(not result.replayed for result in results) == 1
+    assert {result.entity.id for result in results} == {1}
+
+
 async def test_project_update_is_tenant_scoped_and_audited() -> None:
     projects = FakeProjects()
     audit = FakeAudit()
@@ -278,6 +317,7 @@ async def test_project_update_is_tenant_scoped_and_audited() -> None:
         name="Client Portal",
         business_id=11,
         status=ProjectStatus.PLANNING,
+        version=1,
     )
 
     updated = await manager.update_project_for_principal(
@@ -285,17 +325,31 @@ async def test_project_update_is_tenant_scoped_and_audited() -> None:
         principal(),
         1,
         ProjectUpdate(status=ProjectStatus.ACTIVE),
+        1,
+        "update-project-key",
     )
 
-    assert updated.status is ProjectStatus.ACTIVE
+    assert updated.entity.status is ProjectStatus.ACTIVE
+    assert updated.entity.version == 2
     assert audit.events[-1]["tool_name"] == "update_project"
     assert audit.events[-1]["outcome"] == "success"
+
+    with pytest.raises(MutationVersionConflictError):
+        await manager.update_project_for_principal(
+            AsyncMock(),
+            principal(),
+            1,
+            ProjectUpdate(description="stale writer"),
+            1,
+            "stale-update-key",
+        )
 
     projects.items[2] = Project(
         id=2,
         name="Other tenant",
         business_id=999,
         status=ProjectStatus.ACTIVE,
+        version=1,
     )
     with pytest.raises(ProjectNotFoundError):
         await manager.update_project_for_principal(
@@ -303,9 +357,10 @@ async def test_project_update_is_tenant_scoped_and_audited() -> None:
             principal(),
             2,
             ProjectUpdate(status=ProjectStatus.COMPLETED),
+            1,
+            "other-project-key",
         )
     assert projects.items[2].status is ProjectStatus.ACTIVE
-    assert audit.events[-1]["outcome"] == "not_found"
 
 
 async def test_project_archive_is_idempotent_and_tenant_scoped() -> None:
@@ -323,10 +378,15 @@ async def test_project_archive_is_idempotent_and_tenant_scoped() -> None:
         name="Client Portal",
         business_id=11,
         status=ProjectStatus.ACTIVE,
+        version=1,
     )
 
-    first = await manager.archive_project_for_principal(AsyncMock(), principal(), 1)
-    retried = await manager.archive_project_for_principal(AsyncMock(), principal(), 1)
+    first = await manager.archive_project_for_principal(
+        AsyncMock(), principal(), 1, 1, "archive-project-key"
+    )
+    retried = await manager.archive_project_for_principal(
+        AsyncMock(), principal(), 1, 1, "archive-project-key"
+    )
 
     assert first is False
     assert retried is True
@@ -341,6 +401,7 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         name="Client Portal",
         business_id=11,
         status=ProjectStatus.ACTIVE,
+        version=1,
     )
     projects = FakeProjects()
     projects.items[3] = project
@@ -374,6 +435,8 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         3,
         created.entity.id,
         TaskUpdate(status=TaskStatus.DONE),
+        1,
+        "update-task-key",
     )
     assigned = await manager.assign_task_for_principal(
         session,
@@ -381,6 +444,8 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         3,
         created.entity.id,
         7,
+        2,
+        "assign-task-key",
     )
     with pytest.raises(AssigneeNotFoundError):
         await manager.assign_task_for_principal(
@@ -389,20 +454,22 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
             3,
             created.entity.id,
             99,
+            3,
+            "invalid-assignee-key",
         )
     first_archive = await manager.archive_task_for_principal(
-        session, principal(), 3, created.entity.id
+        session, principal(), 3, created.entity.id, 3, "archive-task-key"
     )
     retried_archive = await manager.archive_task_for_principal(
-        session, principal(), 3, created.entity.id
+        session, principal(), 3, created.entity.id, 3, "archive-task-key"
     )
 
     assert created.entity.created_by is TaskSource.MCP
     assert created.entity.assignee_id == 7
     assert replayed.replayed is True
     assert len(tasks.items) == 1
-    assert updated.status is TaskStatus.DONE
-    assert assigned.assignee_id == 7
+    assert updated.entity.status is TaskStatus.DONE
+    assert assigned.entity.assignee_id == 7
     assert created.entity.is_deleted is True
     assert first_archive is False
     assert retried_archive is True
@@ -410,6 +477,7 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         "create_task",
         "create_task",
         "update_task",
+        "assign_task",
         "assign_task",
         "archive_task",
         "archive_task",
@@ -419,6 +487,7 @@ async def test_task_writes_are_idempotent_sourced_and_audited() -> None:
         "idempotent_replay",
         "success",
         "success",
+        "invalid_assignee",
         "success",
         "idempotent_replay",
     ]

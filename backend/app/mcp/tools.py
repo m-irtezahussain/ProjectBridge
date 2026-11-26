@@ -25,6 +25,7 @@ from app.core.services.mcp_auth import MCPAuthenticationError, MCPAuthorizationE
 from app.core.services.mcp_mutations import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
+    MutationVersionConflictError,
 )
 from app.core.services.vector_store import VectorStoreError
 from app.mcp.auth import MCPDatabaseSessions, require_mcp_principal
@@ -118,12 +119,20 @@ async def structured_mcp_errors() -> AsyncIterator[None]:
     except AssigneeNotFoundError as error:
         detail = MCPErrorDetail(code="validation_error", message=str(error))
         raise ToolError(detail.model_dump_json()) from error
-    except (IdempotencyConflictError, IdempotencyInProgressError) as error:
+    except IdempotencyConflictError as error:
         detail = MCPErrorDetail(code="conflict", message=str(error))
+        raise ToolError(detail.model_dump_json()) from error
+    except IdempotencyInProgressError as error:
+        detail = MCPErrorDetail(
+            code="conflict",
+            message=str(error),
+            retryable=True,
+        )
         raise ToolError(detail.model_dump_json()) from error
     except (
         DocumentStateConflictError,
         IngestionConflictError,
+        MutationVersionConflictError,
         SearchConflictError,
     ) as error:
         detail = MCPErrorDetail(code="conflict", message=str(error))
@@ -394,28 +403,33 @@ def register_write_tools(
 
     @server.tool(
         description=(
-            "Update fields on one active project in the connected business. Use "
-            "list_projects first when the stable project ID is unknown."
+            "Update one active project with optimistic version checking. Reuse the "
+            "same idempotency_key and unchanged payload for retries."
         ),
-        annotations=WRITE,
+        annotations=IDEMPOTENT_WRITE,
         structured_output=True,
     )
-    async def update_project(input: UpdateProjectInput) -> ProjectSummary:
+    async def update_project(input: UpdateProjectInput) -> ProjectMutationResult:
         async with structured_mcp_errors():
             principal = require_mcp_principal("projects:write")
             async with sessions.session() as session:
-                project = await projects.update_project_for_principal(
+                result = await projects.update_project_for_principal(
                     session,
                     principal,
                     input.project_id,
                     input.project_data(),
+                    input.expected_version,
+                    input.idempotency_key,
                 )
-        return ProjectSummary.model_validate(project)
+        return ProjectMutationResult(
+            project=ProjectSummary.model_validate(result.entity),
+            replayed=result.replayed,
+        )
 
     @server.tool(
         description=(
-            "Archive a project by soft deletion. Retrying the same project ID is "
-            "safe and returns replayed=true."
+            "Archive a project by soft deletion with optimistic version checking. "
+            "Retry with the same idempotency_key and unchanged payload."
         ),
         annotations=IDEMPOTENT_DESTRUCTIVE_WRITE,
         structured_output=True,
@@ -425,7 +439,11 @@ def register_write_tools(
             principal = require_mcp_principal("projects:write")
             async with sessions.session() as session:
                 replayed = await projects.archive_project_for_principal(
-                    session, principal, input.project_id
+                    session,
+                    principal,
+                    input.project_id,
+                    input.expected_version,
+                    input.idempotency_key,
                 )
         return ArchiveProjectResult(
             project_id=input.project_id, archived=True, replayed=replayed
@@ -457,45 +475,56 @@ def register_write_tools(
 
     @server.tool(
         description=(
-            "Update fields on one active task. The project ID and task ID must both "
-            "refer to records in the connected business."
+            "Update one active task with optimistic version checking. Reuse the same "
+            "idempotency_key and unchanged payload for retries."
         ),
-        annotations=WRITE,
+        annotations=IDEMPOTENT_WRITE,
         structured_output=True,
     )
-    async def update_task(input: UpdateTaskInput) -> TaskSummary:
+    async def update_task(input: UpdateTaskInput) -> TaskMutationResult:
         async with structured_mcp_errors():
             principal = require_mcp_principal("tasks:write")
             async with sessions.session() as session:
-                task = await tasks.update_task_for_principal(
+                result = await tasks.update_task_for_principal(
                     session,
                     principal,
                     input.project_id,
                     input.task_id,
                     input.task_data(),
+                    input.expected_version,
+                    input.idempotency_key,
                 )
-        return TaskSummary.model_validate(task)
+        return TaskMutationResult(
+            task=TaskSummary.model_validate(result.entity),
+            replayed=result.replayed,
+        )
 
     @server.tool(
         description=(
             "Assign or reassign one active task to a user returned by "
-            "list_assignees. The assignee must belong to the connected business."
+            "list_assignees. Requires expected_version and a retry-stable "
+            "idempotency_key."
         ),
-        annotations=WRITE,
+        annotations=IDEMPOTENT_WRITE,
         structured_output=True,
     )
-    async def assign_task(input: AssignTaskInput) -> TaskSummary:
+    async def assign_task(input: AssignTaskInput) -> TaskMutationResult:
         async with structured_mcp_errors():
             principal = require_mcp_principal("tasks:write")
             async with sessions.session() as session:
-                task = await tasks.assign_task_for_principal(
+                result = await tasks.assign_task_for_principal(
                     session,
                     principal,
                     input.project_id,
                     input.task_id,
                     input.assignee_id,
+                    input.expected_version,
+                    input.idempotency_key,
                 )
-        return TaskSummary.model_validate(task)
+        return TaskMutationResult(
+            task=TaskSummary.model_validate(result.entity),
+            replayed=result.replayed,
+        )
 
     @server.tool(
         description=(
@@ -510,7 +539,12 @@ def register_write_tools(
             principal = require_mcp_principal("tasks:write")
             async with sessions.session() as session:
                 replayed = await tasks.archive_task_for_principal(
-                    session, principal, input.project_id, input.task_id
+                    session,
+                    principal,
+                    input.project_id,
+                    input.task_id,
+                    input.expected_version,
+                    input.idempotency_key,
                 )
         return ArchiveTaskResult(
             task_id=input.task_id, archived=True, replayed=replayed

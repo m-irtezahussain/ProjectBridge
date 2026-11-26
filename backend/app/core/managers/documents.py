@@ -19,6 +19,11 @@ from app.core.services.document_validation import (
     DocumentValidationService,
 )
 from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_mutations import (
+    MutationVersionConflictError,
+    completed_idempotency_replay,
+    request_fingerprint,
+)
 from app.models import (
     ActionOrigin,
     Business,
@@ -28,7 +33,7 @@ from app.models import (
 )
 from app.repositories.businesses import BusinessRepository
 from app.repositories.documents import DocumentAuditRepository, DocumentRepository
-from app.repositories.mcp_operations import MCPAuditRepository
+from app.repositories.mcp_operations import MCPAuditRepository, MCPIdempotencyRepository
 from app.repositories.projects import ProjectRepository
 from app.repositories.search import SearchRepository
 from app.schemas.document import InitiateDocumentUploadInput
@@ -56,6 +61,7 @@ class DocumentManager:
         mcp_audit: MCPAuditRepository | None = None,
         validation: DocumentValidationService | None = None,
         search: SearchRepository | None = None,
+        idempotency: MCPIdempotencyRepository | None = None,
     ) -> None:
         self._settings = settings
         self._storage = storage
@@ -66,6 +72,7 @@ class DocumentManager:
         self._mcp_audit = mcp_audit or MCPAuditRepository()
         self._validation = validation or DocumentValidationService(settings)
         self._search = search or SearchRepository()
+        self._idempotency = idempotency or MCPIdempotencyRepository()
 
     async def _require_business(
         self, session: AsyncSession, principal: MCPPrincipal
@@ -107,6 +114,7 @@ class DocumentManager:
             declared_size=data.size_bytes,
             quarantine_key=quarantine_key,
             status=DocumentStatus.PENDING,
+            version=1,
             upload_expires_at=datetime.now(UTC)
             + timedelta(seconds=self._settings.s3_presign_expiry_seconds),
         )
@@ -426,20 +434,56 @@ class DocumentManager:
         session: AsyncSession,
         principal: MCPPrincipal,
         document_id: int,
+        expected_version: int,
+        idempotency_key: str,
     ) -> bool:
         await self._require_business(session, principal)
-        document = await self._documents.get(
+        tool_name = "archive_document"
+        fingerprint = request_fingerprint(
+            tool_name,
+            {"document_id": document_id, "expected_version": expected_version},
+        )
+        claim = await self._idempotency.claim(
+            session,
+            principal=principal,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        replay = completed_idempotency_replay(
+            claim, fingerprint=fingerprint, result_type="document_archive"
+        )
+        if replay is not None:
+            self._mcp_audit.add(
+                session,
+                principal=principal,
+                tool_name=tool_name,
+                target_type="document",
+                target_id=document_id,
+                outcome="idempotent_replay",
+            )
+            await session.commit()
+            return True
+        document = await self._documents.get_for_update(
             session,
             principal.business_id,
             document_id,
             include_archived=True,
         )
         if document is None:
+            await session.rollback()
             raise DocumentNotFoundError("Document not found")
         replayed = document.archived_at is not None
         if not replayed:
+            if document.version != expected_version:
+                await session.rollback()
+                raise MutationVersionConflictError(
+                    f"Document version conflict: expected {expected_version}, "
+                    f"current {document.version}"
+                )
             document.archived_at = datetime.now(UTC)
             document.status = DocumentStatus.ARCHIVED
+            document.version += 1
             await self._search.enqueue(
                 session,
                 business_id=principal.business_id,
@@ -448,6 +492,12 @@ class DocumentManager:
                 operation=SearchJobOperation.DELETE_DOCUMENT,
                 max_attempts=self._settings.rag_max_attempts,
             )
+        self._idempotency.complete(
+            claim.record,
+            result_type="document_archive",
+            result_id=document.id,
+            response_body={"archived": True, "version": document.version},
+        )
         self._document_audit.add(
             session,
             document=document,
@@ -458,7 +508,7 @@ class DocumentManager:
         self._mcp_audit.add(
             session,
             principal=principal,
-            tool_name="archive_document",
+            tool_name=tool_name,
             target_type="document",
             target_id=document.id,
             outcome="idempotent_replay" if replayed else "success",

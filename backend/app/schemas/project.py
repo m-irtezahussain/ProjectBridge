@@ -81,3 +81,4 @@ class ProjectRead(BaseModel):
     description: str | None
     business_id: int
     status: ProjectStatus
+    version: int

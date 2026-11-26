@@ -48,6 +48,7 @@ class ProjectSummary(BaseModel):
     name: str
     status: ProjectStatus
     description: str | None
+    version: int
 
 
 class ProjectListResult(BaseModel):
@@ -80,18 +81,34 @@ class UpdateProjectInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
     name: str | None = Field(default=None, min_length=2, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     status: ProjectStatus | None = None
 
     @model_validator(mode="after")
     def require_update(self) -> "UpdateProjectInput":
-        if not (self.model_fields_set - {"project_id"}):
+        if not (
+            self.model_fields_set
+            - {"project_id", "expected_version", "idempotency_key"}
+        ):
             raise ValueError("At least one project field must be provided")
         return self
 
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
+
     def project_data(self) -> ProjectUpdate:
-        fields = self.model_fields_set - {"project_id"}
+        fields = self.model_fields_set - {
+            "project_id",
+            "expected_version",
+            "idempotency_key",
+        }
         return ProjectUpdate.model_validate(
             {field: getattr(self, field) for field in fields}
         )
@@ -108,6 +125,15 @@ class ArchiveProjectInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
 
 class ArchiveProjectResult(BaseModel):
@@ -141,6 +167,15 @@ class AssignTaskInput(BaseModel):
     project_id: int = Field(gt=0)
     task_id: int = Field(gt=0)
     assignee_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
 
 class UpdateTaskInput(BaseModel):
@@ -148,6 +183,8 @@ class UpdateTaskInput(BaseModel):
 
     project_id: int = Field(gt=0)
     task_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
     title: str | None = Field(default=None, min_length=2, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     status: TaskStatus | None = None
@@ -156,12 +193,27 @@ class UpdateTaskInput(BaseModel):
 
     @model_validator(mode="after")
     def require_update(self) -> "UpdateTaskInput":
-        if not (self.model_fields_set - {"project_id", "task_id"}):
+        if not (
+            self.model_fields_set
+            - {"project_id", "task_id", "expected_version", "idempotency_key"}
+        ):
             raise ValueError("At least one task field must be provided")
         return self
 
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
+
     def task_data(self) -> TaskUpdate:
-        fields = self.model_fields_set - {"project_id", "task_id"}
+        fields = self.model_fields_set - {
+            "project_id",
+            "task_id",
+            "expected_version",
+            "idempotency_key",
+        }
         return TaskUpdate.model_validate(
             {field: getattr(self, field) for field in fields}
         )
@@ -172,6 +224,15 @@ class ArchiveTaskInput(BaseModel):
 
     project_id: int = Field(gt=0)
     task_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
 
 class TaskSummary(BaseModel):
@@ -186,6 +247,7 @@ class TaskSummary(BaseModel):
     source_document_id: int | None
     source_candidate_id: int | None
     project_id: int
+    version: int
 
 
 class TaskSourceReference(BaseModel):

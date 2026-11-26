@@ -16,6 +16,7 @@ class FakeProjectManager:
             description=None,
             business_id=7,
             status=ProjectStatus.PLANNING,
+            version=1,
         )
 
     async def list_projects(self, _session: object, _token: str | None) -> list[Project]:

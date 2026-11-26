@@ -26,6 +26,24 @@ class DocumentRepository:
             filters.append(Document.archived_at.is_(None))
         return await session.scalar(select(Document).where(*filters))
 
+    async def get_for_update(
+        self,
+        session: AsyncSession,
+        business_id: int,
+        document_id: int,
+        *,
+        include_archived: bool = False,
+    ) -> Document | None:
+        filters = [
+            Document.id == document_id,
+            Document.business_id == business_id,
+        ]
+        if not include_archived:
+            filters.append(Document.archived_at.is_(None))
+        return await session.scalar(
+            select(Document).where(*filters).with_for_update()
+        )
+
     async def find_by_hash(
         self,
         session: AsyncSession,

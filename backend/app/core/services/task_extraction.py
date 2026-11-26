@@ -1,3 +1,4 @@
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -18,6 +19,13 @@ class SafeTaskCandidateExtractor:
 
     name = "safe_marker_extractor"
     version = "1.0"
+
+    @staticmethod
+    def dedupe_key(
+        *, title: str, source_excerpt: str, source_line_start: int | None
+    ) -> str:
+        canonical = f"{source_line_start or 0}\n{title}\n{source_excerpt}"
+        return hashlib.sha256(canonical.encode()).hexdigest()
 
     def extract(self, untrusted_text: str) -> list[ExtractedTaskCandidate]:
         candidates: list[ExtractedTaskCandidate] = []

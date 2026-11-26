@@ -32,8 +32,13 @@ The MCP server exposes authenticated account, project, and task tools. Read tool
 write tools include project creation, updates, and archival plus task creation, assignment,
 reassignment, updates, and retry-safe archival. The HTTP MCP endpoint requires a
 ProjectBridge MCP OAuth access token and resolves its user, active grant, scopes, and owned
-business before accepting a request. Retryable creates require an idempotency key and every MCP
-write records an audit outcome. Expected MCP failures use stable JSON error codes for validation,
+business before accepting a request. Creates, updates, assignments, archives, and ingestion
+control mutations require a retry-stable idempotency key. Updates and archives also require the
+latest returned `version`, preventing stale writers from overwriting newer changes. Idempotency
+claims use a configurable lease (`MCP_IDEMPOTENCY_LEASE_SECONDS`), recover expired `started`
+claims, and are retained before bounded opportunistic cleanup according to
+`MCP_IDEMPOTENCY_RETENTION_HOURS` and `MCP_IDEMPOTENCY_CLEANUP_BATCH`. Every MCP write records
+an audit outcome. Expected MCP failures use stable JSON error codes for validation,
 authorization, conflicts, and missing records. `get_service_status` uses the same `StatusService` as the REST
 liveness route to demonstrate the one-core/two-interface architecture.
 
@@ -51,6 +56,12 @@ complete OCR text.
 and ingestion IDs, the immutable content hash, a bounded source excerpt, page/line
 coordinates, extractor and OCR versions, and initiation/execution origins. It never returns
 raw document bytes or complete OCR text and requires both `tasks:read` and `documents:read`.
+
+Authorized business owners can query the append-only audit stream through
+`GET /api/v1/audit-events`; MCP clients require the dedicated `audit:read` scope and use
+`list_audit_events`. Events include actor, business scope, interface, action, target, UTC
+timestamp, and outcome. Secret-like detail fields are centrally redacted. PostgreSQL and ORM
+guards reject updates and deletes to audit records.
 
 Document ingestion uses a quarantine-first direct upload flow for private S3-compatible
 storage such as MinIO by Silo. Configure `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`,
