@@ -2,15 +2,18 @@ from collections.abc import AsyncIterator
 
 from httpx import ASGITransport, AsyncClient
 
-from app.core.managers.auth import AuthenticationError
+from app.core.services.mcp_auth import AuthenticatedPrincipal
 from app.db import get_session
-from app.deps import get_task_manager
+from app.deps import get_task_manager, get_web_principal
 from app.main import create_app
-from app.models import Task, TaskPriority, TaskSource, TaskStatus
+from app.models import ActionOrigin, Task, TaskPriority, TaskSource, TaskStatus
+
+WEB_PRINCIPAL = AuthenticatedPrincipal(1, 7, frozenset(), "rest:1", ActionOrigin.REST)
 
 
 class FakeTaskManager:
     def __init__(self) -> None:
+        self.list_options: dict[str, object] = {}
         self.task = Task(
             id=5,
             title="Prepare release",
@@ -23,10 +26,15 @@ class FakeTaskManager:
             version=1,
         )
 
-    async def list_tasks(
-        self, _session: object, _token: str | None, _project_id: int
-    ) -> list[Task]:
-        return [self.task]
+    async def list_tasks_page_for_principal(
+        self,
+        _session: object,
+        _principal: object,
+        _project_id: int,
+        **options: object,
+    ) -> tuple[list[Task], int]:
+        self.list_options = options
+        return [self.task], 1
 
     async def get_task(
         self,
@@ -82,11 +90,14 @@ async def test_tasks_crud_contract_and_validation() -> None:
     manager = FakeTaskManager()
     app.dependency_overrides[get_session] = fake_session
     app.dependency_overrides[get_task_manager] = lambda: manager
+    app.dependency_overrides[get_web_principal] = lambda: WEB_PRINCIPAL
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        listed = await client.get("/api/v1/projects/4/tasks")
+        listed = await client.get(
+            "/api/v1/projects/4/tasks?priority=medium&query=release&limit=10&sort_by=title&sort_order=asc"
+        )
         fetched = await client.get("/api/v1/projects/4/tasks/5")
         created = await client.post(
             "/api/v1/projects/4/tasks",
@@ -112,6 +123,18 @@ async def test_tasks_crud_contract_and_validation() -> None:
         )
 
     assert listed.status_code == 200
+    assert listed.json()["tasks"][0]["id"] == 5
+    assert listed.json()["total"] == 1
+    assert manager.list_options == {
+        "status": None,
+        "priority": TaskPriority.MEDIUM,
+        "assignee_id": None,
+        "query": "release",
+        "limit": 10,
+        "offset": 0,
+        "sort_by": "title",
+        "descending": False,
+    }
     assert fetched.status_code == 200
     assert created.status_code == 201
     assert created.json() == {
@@ -135,15 +158,9 @@ async def test_tasks_crud_contract_and_validation() -> None:
 
 
 async def test_tasks_api_requires_authentication() -> None:
-    class UnauthenticatedTaskManager(FakeTaskManager):
-        async def list_tasks(
-            self, _session: object, _token: str | None, _project_id: int
-        ) -> list[Task]:
-            raise AuthenticationError("Authentication required")
-
     app = create_app()
     app.dependency_overrides[get_session] = fake_session
-    app.dependency_overrides[get_task_manager] = UnauthenticatedTaskManager
+    app.dependency_overrides[get_task_manager] = FakeTaskManager
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

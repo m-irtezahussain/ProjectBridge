@@ -10,7 +10,7 @@ from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundErr
 from app.core.services.audit import AuditService
 from app.core.services.embeddings import EmbeddingService
 from app.core.services.knowledge_text import normalize_knowledge_text
-from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_auth import AuthenticatedPrincipal
 from app.core.services.vector_store import ChromaVectorStore, VectorHit, VectorRecord
 from app.models import (
     ActionOrigin,
@@ -29,6 +29,10 @@ class SearchConflictError(ValueError):
     pass
 
 
+class SearchJobNotFoundError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class KnowledgeSearchHit:
     excerpt: str
@@ -41,6 +45,15 @@ class KnowledgeSearchHit:
     source_text_id: int | None
     ingestion_run_id: int | None
     untrusted_content: bool = True
+
+
+@dataclass(frozen=True)
+class ProjectIndexState:
+    project_id: int
+    status: str
+    pending_jobs: int
+    last_indexed_at: datetime | None
+    last_error: str | None
 
 
 class SemanticSearchManager:
@@ -67,7 +80,7 @@ class SemanticSearchManager:
         self._audit = audit or AuditService()
 
     async def _require_business(
-        self, session: AsyncSession, principal: MCPPrincipal
+        self, session: AsyncSession, principal: AuthenticatedPrincipal
     ) -> Business:
         business = await self._businesses.get_for_owner(session, principal.user_id)
         if business is None or business.id != principal.business_id:
@@ -77,7 +90,7 @@ class SemanticSearchManager:
     async def search(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         query: str,
         *,
         project_id: int | None,
@@ -124,7 +137,7 @@ class SemanticSearchManager:
             session,
             business_id=principal.business_id,
             actor_user_id=principal.user_id,
-            interface=ActionOrigin.MCP,
+            interface=principal.origin,
             action="knowledge.search",
             target_type="project" if project_id is not None else "business",
             target_id=project_id or principal.business_id,
@@ -140,7 +153,7 @@ class SemanticSearchManager:
     async def enqueue_project_reindex(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         project_id: int,
     ) -> SearchIndexJob:
         await self._require_business(session, principal)
@@ -160,7 +173,7 @@ class SemanticSearchManager:
             session,
             business_id=principal.business_id,
             actor_user_id=principal.user_id,
-            interface=ActionOrigin.MCP,
+            interface=principal.origin,
             action="knowledge.reindex",
             target_type="project",
             target_id=project_id,
@@ -168,6 +181,70 @@ class SemanticSearchManager:
         )
         await session.commit()
         return job
+
+    async def get_index_job(
+        self,
+        session: AsyncSession,
+        principal: AuthenticatedPrincipal,
+        job_id: int,
+    ) -> SearchIndexJob:
+        await self._require_business(session, principal)
+        job = await self._search.get_job(session, principal.business_id, job_id)
+        if job is None or job.project_id is None:
+            raise SearchJobNotFoundError("Search index job not found")
+        return job
+
+    async def get_project_index_state(
+        self,
+        session: AsyncSession,
+        principal: AuthenticatedPrincipal,
+        project_id: int,
+    ) -> ProjectIndexState:
+        await self._require_business(session, principal)
+        project = await self._projects.get_active(
+            session, principal.business_id, project_id
+        )
+        if project is None:
+            raise ProjectNotFoundError("Project not found")
+        latest = await self._search.get_latest_project_job(
+            session, principal.business_id, project_id
+        )
+        completed = await self._search.get_latest_completed_project_job(
+            session, principal.business_id, project_id
+        )
+        pending_jobs = await self._search.count_pending_project_jobs(
+            session, principal.business_id, project_id
+        )
+        if latest is None:
+            state = "stale"
+        elif pending_jobs:
+            state = (
+                latest.status.value
+                if latest.status
+                in {
+                    SearchJobStatus.QUEUED,
+                    SearchJobStatus.PROCESSING,
+                    SearchJobStatus.RETRY_SCHEDULED,
+                }
+                else SearchJobStatus.QUEUED.value
+            )
+        elif latest.status is SearchJobStatus.FAILED:
+            state = SearchJobStatus.FAILED.value
+        elif completed is not None:
+            state = "ready"
+        else:
+            state = "stale"
+        return ProjectIndexState(
+            project_id=project_id,
+            status=state,
+            pending_jobs=pending_jobs,
+            last_indexed_at=completed.completed_at if completed is not None else None,
+            last_error=(
+                latest.error_message
+                if latest is not None and latest.status is SearchJobStatus.FAILED
+                else None
+            ),
+        )
 
     @staticmethod
     def _metadata_int(metadata: dict[str, object], key: str) -> int | None:

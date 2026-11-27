@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import ValidationError
 
-from app.api.routers.auth import ACCESS_COOKIE
+from app.api.auth_cookies import ACCESS_COOKIE
 from app.config import get_settings
 from app.core.services.mcp_oauth import MCP_SCOPES, ConsentClaims, OAuthProtocolError
 from app.core.services.rate_limits import RateLimitExceededError

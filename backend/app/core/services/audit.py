@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_auth import AuthenticatedPrincipal
 from app.models import ActionOrigin, AuditEvent
 from app.repositories.audit import AuditRepository
 
@@ -75,7 +75,7 @@ class AuditService:
         self,
         session: AsyncSession,
         *,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         tool_name: str,
         target_type: str,
         target_id: int | None,
@@ -87,7 +87,7 @@ class AuditService:
             session,
             business_id=principal.business_id,
             actor_user_id=principal.user_id,
-            interface=ActionOrigin.MCP,
+            interface=principal.origin,
             action=tool_name,
             target_type=target_type,
             target_id=target_id,

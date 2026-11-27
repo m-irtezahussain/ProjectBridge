@@ -1,6 +1,7 @@
 from fastapi import Response
 
-from app.api.routers.auth import REFRESH_COOKIE, _set_refresh_cookie
+from app.api.auth_cookies import REFRESH_COOKIE
+from app.api.routers.auth import _set_refresh_cookie
 
 
 def test_refresh_cookie_is_http_only_strict_and_auth_scoped() -> None:

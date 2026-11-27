@@ -107,3 +107,43 @@ class RetryIngestionInput(BaseModel):
         if not value.strip():
             raise ValueError("idempotency_key must not be blank")
         return value
+
+
+class ConfirmCandidatesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved_candidate_ids: list[int] = Field(default_factory=list, max_length=200)
+    rejected_candidate_ids: list[int] = Field(default_factory=list, max_length=200)
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_decisions(self) -> "ConfirmCandidatesRequest":
+        approved = set(self.approved_candidate_ids)
+        rejected = set(self.rejected_candidate_ids)
+        if len(approved) != len(self.approved_candidate_ids) or len(rejected) != len(
+            self.rejected_candidate_ids
+        ):
+            raise ValueError("Candidate IDs must not be duplicated")
+        if approved & rejected:
+            raise ValueError("A candidate cannot be both approved and rejected")
+        return self
+
+
+class RetryIngestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value

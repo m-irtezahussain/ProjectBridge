@@ -1,5 +1,5 @@
 import type { ProjectItem, ProjectStatus } from "@/components/projects/project-data";
-import { publicApiBaseUrl } from "./api-base";
+import { ApiError, apiRequest, type OffsetPage, type PageOptions, queryString, type SortOrder } from "./api-client";
 
 export type ProjectPayload = Readonly<{
   name: string;
@@ -7,96 +7,58 @@ export type ProjectPayload = Readonly<{
   status: ProjectStatus;
 }>;
 
-type ApiErrorBody = Readonly<{
-  detail?: string | Array<{ msg?: string }>;
+export type ProjectRecord = ProjectItem & Readonly<{ version: number }>;
+
+export { ApiError as ProjectsApiError };
+
+export type ProjectListOptions = PageOptions & Readonly<{
+  status?: ProjectStatus;
+  query?: string;
+  sort_by?: "id" | "name" | "status";
+  sort_order?: SortOrder;
 }>;
 
-export class ProjectsApiError extends Error {
-  constructor(message: string, readonly status?: number) {
-    super(message);
-    this.name = "ProjectsApiError";
-  }
+type ProjectPageResponse = Omit<OffsetPage<ProjectRecord>, "items"> & Readonly<{ projects: readonly ProjectRecord[] }>;
+
+export async function listProjects(): Promise<ProjectRecord[]> {
+  const page = await listProjectsPage({ limit: 100 });
+  return [...page.items];
 }
 
-function errorMessage(body: ApiErrorBody, status: number): string {
-  const detail = Array.isArray(body.detail) ? body.detail[0]?.msg : body.detail;
-  if (detail) return detail;
-  if (status === 401) return "Your session has expired. Sign in again to continue.";
-  if (status === 403) return "Register a business before managing projects.";
-  if (status === 404) return "That project could not be found.";
-  return "We could not complete the project request. Please try again.";
+export async function listProjectsPage(options: ProjectListOptions = {}): Promise<OffsetPage<ProjectRecord>> {
+  const page = await apiRequest<ProjectPageResponse>(`/api/v1/projects${queryString(options)}`);
+  return { ...page, items: page.projects };
 }
 
-async function refreshSession(): Promise<boolean> {
-  try {
-    const response = await fetch(`${publicApiBaseUrl()}/api/v1/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
-      signal: AbortSignal.timeout(10_000),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+export function getProject(projectId: number): Promise<ProjectRecord> {
+  return apiRequest<ProjectRecord>(`/api/v1/projects/${projectId}`);
 }
 
-async function request<T>(
-  path: string,
-  init: RequestInit = {},
-  allowRefresh = true,
-): Promise<T> {
-  let response: Response;
-  const headers = new Headers(init.headers);
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
-  try {
-    response = await fetch(`${publicApiBaseUrl()}${path}`, {
-      ...init,
-      credentials: "include",
-      headers,
-      signal: init.signal ?? AbortSignal.timeout(10_000),
-    });
-  } catch {
-    throw new ProjectsApiError(
-      "The projects API could not be reached. Check your connection and try again.",
-    );
-  }
-
-  if (response.status === 401 && allowRefresh && await refreshSession()) {
-    return request<T>(path, init, false);
-  }
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
-    throw new ProjectsApiError(errorMessage(body, response.status), response.status);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
-
-export function listProjects(): Promise<ProjectItem[]> {
-  return request<ProjectItem[]>("/api/v1/projects");
-}
-
-export function getProject(projectId: number): Promise<ProjectItem> {
-  return request<ProjectItem>(`/api/v1/projects/${projectId}`);
-}
-
-export function createProject(payload: ProjectPayload): Promise<ProjectItem> {
-  return request<ProjectItem>("/api/v1/projects", {
+export function createProject(payload: ProjectPayload): Promise<ProjectRecord> {
+  return apiRequest<ProjectRecord>("/api/v1/projects", {
     method: "POST",
-    body: JSON.stringify(payload),
+    json: payload,
   });
 }
 
 export function updateProject(
   projectId: number,
   payload: ProjectPayload,
-): Promise<ProjectItem> {
-  return request<ProjectItem>(`/api/v1/projects/${projectId}`, {
+): Promise<ProjectRecord> {
+  return apiRequest<ProjectRecord>(`/api/v1/projects/${projectId}`, {
     method: "PATCH",
-    body: JSON.stringify(payload),
+    json: payload,
   });
 }
 
 export function deleteProject(projectId: number): Promise<void> {
-  return request<void>(`/api/v1/projects/${projectId}`, { method: "DELETE" });
+  return apiRequest<void>(`/api/v1/projects/${projectId}`, { method: "DELETE" });
+}
+
+export function updateProjectVersioned(projectId: number, payload: Partial<ProjectPayload>, expectedVersion: number, idempotencyKey: string): Promise<Readonly<{ project: ProjectRecord; replayed: boolean }>> {
+  return apiRequest(`/api/v1/projects/${projectId}`, { method: "PATCH", json: { ...payload, expected_version: expectedVersion, idempotency_key: idempotencyKey } });
+}
+
+export function archiveProject(projectId: number, expectedVersion: number, idempotencyKey: string): Promise<Readonly<{ project_id: number; archived: boolean; replayed: boolean }>> {
+  return apiRequest(`/api/v1/projects/${projectId}`, { method: "DELETE", json: { expected_version: expectedVersion, idempotency_key: idempotencyKey } });
 }

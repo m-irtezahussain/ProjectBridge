@@ -3,99 +3,61 @@ import type {
   TaskPriority,
   TaskStatus,
 } from "@/components/project-workspace/task-data";
-import { publicApiBaseUrl } from "./api-base";
+import { ApiError, apiRequest, type OffsetPage, type PageOptions, queryString, type SortOrder } from "./api-client";
 
 export type TaskPayload = Readonly<{
   title: string;
   description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
+  assignee_id?: number | null;
 }>;
 
 export type TaskUpdatePayload = Partial<TaskPayload>;
 
-type ApiErrorBody = Readonly<{
-  detail?: string | Array<{ msg?: string }>;
+export type TaskRecord = ProjectTask & Readonly<{
+  assignee_id: number | null;
+  source_document_id: number | null;
+  source_candidate_id: number | null;
+  version: number;
 }>;
 
-export class TasksApiError extends Error {
-  constructor(message: string, readonly status?: number) {
-    super(message);
-    this.name = "TasksApiError";
-  }
-}
+export { ApiError as TasksApiError };
 
-function errorMessage(body: ApiErrorBody, status: number): string {
-  const detail = Array.isArray(body.detail) ? body.detail[0]?.msg : body.detail;
-  if (detail) return detail;
-  if (status === 401) return "Your session has expired. Sign in again to continue.";
-  if (status === 403) return "Register a business before managing tasks.";
-  if (status === 404) return "That task or project could not be found.";
-  return "We could not complete the task request. Please try again.";
-}
+export type TaskListOptions = PageOptions & Readonly<{
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  assignee_id?: number;
+  query?: string;
+  sort_by?: "id" | "title" | "status" | "priority";
+  sort_order?: SortOrder;
+}>;
 
-async function refreshSession(): Promise<boolean> {
-  try {
-    const response = await fetch(`${publicApiBaseUrl()}/api/v1/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
-      signal: AbortSignal.timeout(10_000),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function request<T>(
-  path: string,
-  init: RequestInit = {},
-  allowRefresh = true,
-): Promise<T> {
-  let response: Response;
-  const headers = new Headers(init.headers);
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
-  try {
-    response = await fetch(`${publicApiBaseUrl()}${path}`, {
-      ...init,
-      credentials: "include",
-      headers,
-      signal: init.signal ?? AbortSignal.timeout(10_000),
-    });
-  } catch {
-    throw new TasksApiError(
-      "The tasks API could not be reached. Check your connection and try again.",
-    );
-  }
-
-  if (response.status === 401 && allowRefresh && await refreshSession()) {
-    return request<T>(path, init, false);
-  }
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
-    throw new TasksApiError(errorMessage(body, response.status), response.status);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
+type TaskPageResponse = Omit<OffsetPage<TaskRecord>, "items"> & Readonly<{ tasks: readonly TaskRecord[] }>;
 
 function taskPath(projectId: number, taskId?: number): string {
   const base = `/api/v1/projects/${projectId}/tasks`;
   return taskId === undefined ? base : `${base}/${taskId}`;
 }
 
-export function listTasks(projectId: number): Promise<ProjectTask[]> {
-  return request<ProjectTask[]>(taskPath(projectId));
+export async function listTasks(projectId: number): Promise<TaskRecord[]> {
+  const page = await listTasksPage(projectId, { limit: 100 });
+  return [...page.items];
 }
 
-export function getTask(projectId: number, taskId: number): Promise<ProjectTask> {
-  return request<ProjectTask>(taskPath(projectId, taskId));
+export async function listTasksPage(projectId: number, options: TaskListOptions = {}): Promise<OffsetPage<TaskRecord>> {
+  const page = await apiRequest<TaskPageResponse>(`${taskPath(projectId)}${queryString(options)}`);
+  return { ...page, items: page.tasks };
 }
 
-export function createTask(projectId: number, payload: TaskPayload): Promise<ProjectTask> {
-  return request<ProjectTask>(taskPath(projectId), {
+export function getTask(projectId: number, taskId: number): Promise<TaskRecord> {
+  return apiRequest<TaskRecord>(taskPath(projectId, taskId));
+}
+
+export function createTask(projectId: number, payload: TaskPayload): Promise<TaskRecord> {
+  return apiRequest<TaskRecord>(taskPath(projectId), {
     method: "POST",
-    body: JSON.stringify(payload),
+    json: payload,
   });
 }
 
@@ -103,13 +65,25 @@ export function updateTask(
   projectId: number,
   taskId: number,
   payload: TaskUpdatePayload,
-): Promise<ProjectTask> {
-  return request<ProjectTask>(taskPath(projectId, taskId), {
+): Promise<TaskRecord> {
+  return apiRequest<TaskRecord>(taskPath(projectId, taskId), {
     method: "PATCH",
-    body: JSON.stringify(payload),
+    json: payload,
   });
 }
 
 export function deleteTask(projectId: number, taskId: number): Promise<void> {
-  return request<void>(taskPath(projectId, taskId), { method: "DELETE" });
+  return apiRequest<void>(taskPath(projectId, taskId), { method: "DELETE" });
+}
+
+export function updateTaskVersioned(projectId: number, taskId: number, payload: TaskUpdatePayload, expectedVersion: number, idempotencyKey: string): Promise<Readonly<{ task: TaskRecord; replayed: boolean }>> {
+  return apiRequest(taskPath(projectId, taskId), { method: "PATCH", json: { ...payload, expected_version: expectedVersion, idempotency_key: idempotencyKey } });
+}
+
+export function assignTask(projectId: number, taskId: number, assigneeId: number | null, expectedVersion: number, idempotencyKey: string): Promise<Readonly<{ task: TaskRecord; replayed: boolean }>> {
+  return apiRequest(`${taskPath(projectId, taskId)}/assignee`, { method: "PUT", json: { assignee_id: assigneeId, expected_version: expectedVersion, idempotency_key: idempotencyKey } });
+}
+
+export function archiveTask(projectId: number, taskId: number, expectedVersion: number, idempotencyKey: string): Promise<Readonly<{ task_id: number; archived: boolean; replayed: boolean }>> {
+  return apiRequest(taskPath(projectId, taskId), { method: "DELETE", json: { expected_version: expectedVersion, idempotency_key: idempotencyKey } });
 }

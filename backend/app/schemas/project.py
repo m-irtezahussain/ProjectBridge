@@ -82,3 +82,13 @@ class ProjectRead(BaseModel):
     business_id: int
     status: ProjectStatus
     version: int
+
+
+class ProjectPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    projects: list[ProjectRead]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

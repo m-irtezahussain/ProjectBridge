@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -176,7 +176,14 @@ class TaskRepository:
         if assignee_id is not None:
             filters.append(Task.assignee_id == assignee_id)
         if query is not None:
-            filters.append(Task.title.ilike(f"%{query}%"))
+            escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped_query}%"
+            filters.append(
+                or_(
+                    Task.title.ilike(pattern, escape="\\"),
+                    Task.description.ilike(pattern, escape="\\"),
+                )
+            )
 
         sort_columns = {
             "id": Task.id,
@@ -186,6 +193,7 @@ class TaskRepository:
         }
         sort_column = sort_columns[sort_by]
         ordering = sort_column.desc() if descending else sort_column.asc()
+        id_ordering = Task.id.desc() if descending else Task.id.asc()
         total = await session.scalar(
             select(func.count())
             .select_from(Task)
@@ -196,7 +204,7 @@ class TaskRepository:
             select(Task)
             .join(Project, Task.project_id == Project.id)
             .where(*filters)
-            .order_by(ordering, Task.id.asc())
+            .order_by(ordering, id_ordering)
             .limit(limit)
             .offset(offset)
         )

@@ -10,7 +10,7 @@ from app.core.managers.documents import DocumentNotFoundError, DocumentStateConf
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
 from app.core.services.document_storage import DocumentStorage
 from app.core.services.knowledge_text import chunk_knowledge_text
-from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_auth import AuthenticatedPrincipal
 from app.core.services.mcp_mutations import (
     MCPMutationResult,
     MutationVersionConflictError,
@@ -85,7 +85,7 @@ class IngestionManager:
         self._idempotency = idempotency or MCPIdempotencyRepository()
 
     async def _require_business(
-        self, session: AsyncSession, principal: MCPPrincipal
+        self, session: AsyncSession, principal: AuthenticatedPrincipal
     ) -> Business:
         business = await self._businesses.get_for_owner(session, principal.user_id)
         if business is None or business.id != principal.business_id:
@@ -95,7 +95,7 @@ class IngestionManager:
     async def start(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         document_id: int,
         project_id: int,
         idempotency_key: str,
@@ -156,7 +156,7 @@ class IngestionManager:
             business_id=principal.business_id,
             project_id=project_id,
             requested_by_user_id=principal.user_id,
-            initiated_via=ActionOrigin.MCP,
+            initiated_via=principal.origin,
             grant_id=principal.grant_id,
             status=IngestionStatus.QUEUED,
             ocr_status=StageStatus.PENDING,
@@ -198,7 +198,7 @@ class IngestionManager:
             run,
             action="ingestion_queued",
             outcome="queued",
-            origin=ActionOrigin.MCP,
+            origin=principal.origin,
             actor_user_id=principal.user_id,
         )
         self._audit.add(
@@ -219,7 +219,7 @@ class IngestionManager:
         return MCPMutationResult(entity=run, replayed=False)
 
     async def get_run(
-        self, session: AsyncSession, principal: MCPPrincipal, run_id: int
+        self, session: AsyncSession, principal: AuthenticatedPrincipal, run_id: int
     ) -> IngestionRun:
         await self._require_business(session, principal)
         run = await self._ingestion.get_run(session, principal.business_id, run_id)
@@ -227,8 +227,27 @@ class IngestionManager:
             raise IngestionNotFoundError("Ingestion run not found")
         return run
 
+    async def get_latest_for_document(
+        self,
+        session: AsyncSession,
+        principal: AuthenticatedPrincipal,
+        document_id: int,
+    ) -> IngestionRun:
+        await self._require_business(session, principal)
+        document = await self._documents.get(
+            session, principal.business_id, document_id
+        )
+        if document is None:
+            raise DocumentNotFoundError("Document not found")
+        run = await self._ingestion.get_latest_for_document(
+            session, principal.business_id, document_id
+        )
+        if run is None:
+            raise IngestionNotFoundError("Ingestion run not found")
+        return run
+
     async def list_candidates(
-        self, session: AsyncSession, principal: MCPPrincipal, run_id: int
+        self, session: AsyncSession, principal: AuthenticatedPrincipal, run_id: int
     ) -> tuple[IngestionRun, list[TaskCandidate]]:
         run = await self.get_run(session, principal, run_id)
         candidates = await self._ingestion.list_candidates(
@@ -239,7 +258,7 @@ class IngestionManager:
     async def confirm_candidates(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         run_id: int,
         approved_ids: list[int],
         rejected_ids: list[int],
@@ -315,7 +334,7 @@ class IngestionManager:
             run,
             action="candidates_confirmed",
             outcome="queued",
-            origin=ActionOrigin.MCP,
+            origin=principal.origin,
             actor_user_id=principal.user_id,
             details={
                 "approved_count": len(approved_ids),
@@ -342,7 +361,7 @@ class IngestionManager:
     async def retry(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         run_id: int,
         expected_version: int,
         idempotency_key: str,
@@ -411,7 +430,7 @@ class IngestionManager:
             run,
             action="ingestion_retried",
             outcome="queued",
-            origin=ActionOrigin.MCP,
+            origin=principal.origin,
             actor_user_id=principal.user_id,
         )
         self._idempotency.complete(

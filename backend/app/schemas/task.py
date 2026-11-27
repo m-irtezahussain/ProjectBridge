@@ -87,3 +87,13 @@ class TaskRead(BaseModel):
     is_deleted: bool
     created_by: TaskSource
     version: int
+
+
+class TaskPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tasks: list[TaskRead]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

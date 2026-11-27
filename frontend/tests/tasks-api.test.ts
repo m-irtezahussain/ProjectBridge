@@ -26,7 +26,7 @@ afterEach(() => {
 describe("tasks API service", () => {
   it("uses all nested task CRUD endpoints with cookies", async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(Response.json([task]))
+      .mockResolvedValueOnce(Response.json({ tasks: [task], total: 1, limit: 100, offset: 0, has_more: false }))
       .mockResolvedValueOnce(Response.json(task))
       .mockResolvedValueOnce(Response.json(task, { status: 201 }))
       .mockResolvedValueOnce(Response.json({ ...task, status: "in review" }))
@@ -45,7 +45,7 @@ describe("tasks API service", () => {
     await expect(deleteTask(3, 5)).resolves.toBeUndefined();
 
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      "http://localhost:8000/api/v1/projects/3/tasks",
+      "http://localhost:8000/api/v1/projects/3/tasks?limit=100",
       "http://localhost:8000/api/v1/projects/3/tasks/5",
       "http://localhost:8000/api/v1/projects/3/tasks",
       "http://localhost:8000/api/v1/projects/3/tasks/5",

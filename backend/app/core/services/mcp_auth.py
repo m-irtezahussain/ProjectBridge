@@ -10,6 +10,7 @@ from app.core.services.mcp_oauth import (
     OAuthProtocolError,
     parse_scopes,
 )
+from app.models import ActionOrigin
 from app.repositories.businesses import BusinessRepository
 from app.repositories.oauth import OAuthRepository
 from app.repositories.users import UserRepository
@@ -25,12 +26,16 @@ class MCPAuthorizationError(ValueError):
 
 @dataclass(frozen=True)
 class MCPPrincipal:
-    """Server-resolved tenant identity for one authenticated MCP request."""
+    """Server-resolved tenant identity shared by REST and MCP entry points."""
 
     user_id: int
     business_id: int
     scopes: frozenset[str]
     grant_id: str
+    origin: ActionOrigin = ActionOrigin.MCP
+
+
+AuthenticatedPrincipal = MCPPrincipal
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { DashboardFrame } from "@/components/dashboard/dashboard-frame";
 import { ProjectWorkspace } from "@/components/project-workspace/project-workspace";
@@ -23,7 +24,9 @@ export default async function ProjectWorkspacePage({
 
   return (
     <DashboardFrame userName={session.full_name ?? "ProjectBridge user"} userEmail={session.email ?? ""}>
-      <ProjectWorkspace projectId={numericProjectId} />
+      <Suspense fallback={<section className="workspace-no-tasks" aria-label="Loading tasks"><h2>Loading tasks…</h2></section>}>
+        <ProjectWorkspace projectId={numericProjectId} />
+      </Suspense>
     </DashboardFrame>
   );
 }

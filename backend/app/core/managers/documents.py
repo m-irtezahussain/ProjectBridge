@@ -18,14 +18,13 @@ from app.core.services.document_validation import (
     DocumentValidationError,
     DocumentValidationService,
 )
-from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_auth import AuthenticatedPrincipal
 from app.core.services.mcp_mutations import (
     MutationVersionConflictError,
     completed_idempotency_replay,
     request_fingerprint,
 )
 from app.models import (
-    ActionOrigin,
     Business,
     Document,
     DocumentStatus,
@@ -75,7 +74,7 @@ class DocumentManager:
         self._idempotency = idempotency or MCPIdempotencyRepository()
 
     async def _require_business(
-        self, session: AsyncSession, principal: MCPPrincipal
+        self, session: AsyncSession, principal: AuthenticatedPrincipal
     ) -> Business:
         business = await self._businesses.get_for_owner(session, principal.user_id)
         if business is None or business.id != principal.business_id:
@@ -85,7 +84,7 @@ class DocumentManager:
     async def initiate_upload(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         data: InitiateDocumentUploadInput,
     ) -> tuple[Document, PresignedPost]:
         await self._require_business(session, principal)
@@ -108,7 +107,7 @@ class DocumentManager:
             business_id=principal.business_id,
             project_id=data.project_id,
             uploaded_by_user_id=principal.user_id,
-            created_via=ActionOrigin.MCP,
+            created_via=principal.origin,
             original_filename=safe_filename,
             declared_mime_type=data.mime_type,
             declared_size=data.size_bytes,
@@ -132,6 +131,7 @@ class DocumentManager:
                 session,
                 document=document,
                 actor_user_id=principal.user_id,
+                actor_origin=principal.origin,
                 action="initiate",
                 outcome="failed",
                 details={"code": document.failure_code},
@@ -150,6 +150,7 @@ class DocumentManager:
             session,
             document=document,
             actor_user_id=principal.user_id,
+            actor_origin=principal.origin,
             action="initiate",
             outcome="success",
             details={"project_id": data.project_id},
@@ -163,12 +164,13 @@ class DocumentManager:
             outcome="success",
         )
         await session.commit()
+        await session.refresh(document)
         return document, upload
 
     async def finalize_upload(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         document_id: int,
     ) -> tuple[Document, bool]:
         await self._require_business(session, principal)
@@ -191,6 +193,7 @@ class DocumentManager:
             session,
             document=document,
             actor_user_id=principal.user_id,
+            actor_origin=principal.origin,
             action="finalize",
             outcome="started",
         )
@@ -271,6 +274,7 @@ class DocumentManager:
                 session,
                 document=document,
                 actor_user_id=principal.user_id,
+                actor_origin=principal.origin,
                 action="finalize",
                 outcome="duplicate" if duplicate else "success",
                 details={
@@ -327,16 +331,18 @@ class DocumentManager:
                 session,
                 document=document,
                 actor_user_id=principal.user_id,
+                actor_origin=principal.origin,
                 action="quarantine_cleanup",
                 outcome="failed",
             )
             await session.commit()
+        await session.refresh(document)
         return document, False
 
     async def _record_failure(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         document: Document,
         *,
         code: str,
@@ -350,6 +356,7 @@ class DocumentManager:
             session,
             document=document,
             actor_user_id=principal.user_id,
+            actor_origin=principal.origin,
             action="finalize",
             outcome=outcome,
             details={"code": code},
@@ -367,7 +374,7 @@ class DocumentManager:
     async def list_documents(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         *,
         project_id: int | None,
         status: DocumentStatus | None,
@@ -393,7 +400,7 @@ class DocumentManager:
     async def get_document(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         document_id: int,
     ) -> Document:
         await self._require_business(session, principal)
@@ -407,7 +414,7 @@ class DocumentManager:
     async def create_download_url(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         document_id: int,
     ) -> str:
         document = await self.get_document(session, principal, document_id)
@@ -423,6 +430,7 @@ class DocumentManager:
             session,
             document=document,
             actor_user_id=principal.user_id,
+            actor_origin=principal.origin,
             action="download_url",
             outcome="success",
         )
@@ -432,7 +440,7 @@ class DocumentManager:
     async def archive_document(
         self,
         session: AsyncSession,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         document_id: int,
         expected_version: int,
         idempotency_key: str,
@@ -502,6 +510,7 @@ class DocumentManager:
             session,
             document=document,
             actor_user_id=principal.user_id,
+            actor_origin=principal.origin,
             action="archive",
             outcome="idempotent_replay" if replayed else "success",
         )

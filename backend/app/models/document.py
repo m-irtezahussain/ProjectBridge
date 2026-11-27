@@ -123,7 +123,7 @@ class Document(Base):
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
-    __mapper_args__ = {"version_id_col": version}
+    __mapper_args__ = {"version_id_col": version, "eager_defaults": True}
 
     project: Mapped[Project | None] = relationship(
         back_populates="documents", lazy="raise"

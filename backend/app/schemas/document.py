@@ -110,6 +110,20 @@ class ArchiveDocumentInput(BaseModel):
         return value
 
 
+class ArchiveDocumentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(strict=True, min_length=1, max_length=255)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
+
+
 class DocumentDownloadResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

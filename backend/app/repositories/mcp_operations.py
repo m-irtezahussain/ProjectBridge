@@ -8,7 +8,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.services.audit import AuditService
-from app.core.services.mcp_auth import MCPPrincipal
+from app.core.services.mcp_auth import AuthenticatedPrincipal
 from app.core.services.mcp_mutations import hash_idempotency_key
 from app.models import MCPIdempotencyRecord
 
@@ -37,7 +37,7 @@ class MCPIdempotencyRepository:
         self,
         session: AsyncSession,
         *,
-        principal: MCPPrincipal,
+        principal: AuthenticatedPrincipal,
         tool_name: str,
         idempotency_key: str,
         fingerprint: str,

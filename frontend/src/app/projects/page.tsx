@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { DashboardFrame } from "@/components/dashboard/dashboard-frame";
 import { ProjectsView } from "@/components/projects/projects-view";
@@ -17,7 +18,9 @@ export default async function ProjectsPage() {
 
   return (
     <DashboardFrame userName={session.full_name ?? "ProjectBridge user"} userEmail={session.email ?? ""}>
-      <ProjectsView />
+      <Suspense fallback={<section className="projects-grid projects-grid--loading" aria-label="Loading projects"><i /><i /><i /><i /></section>}>
+        <ProjectsView />
+      </Suspense>
     </DashboardFrame>
   );
 }

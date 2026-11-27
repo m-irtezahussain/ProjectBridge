@@ -1,4 +1,9 @@
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.models import SearchJobStatus
 
 
 class SearchProjectKnowledgeInput(BaseModel):
@@ -52,3 +57,28 @@ class ReindexProjectKnowledgeResult(BaseModel):
     job_id: int
     project_id: int
     queued: bool = True
+
+
+class SearchIndexJobResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    id: int
+    project_id: int
+    status: SearchJobStatus
+    attempts: int
+    max_attempts: int
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class ProjectIndexStateResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: int
+    status: Literal["ready", "stale"] | SearchJobStatus
+    pending_jobs: int
+    last_indexed_at: datetime | None
+    last_error: str | None

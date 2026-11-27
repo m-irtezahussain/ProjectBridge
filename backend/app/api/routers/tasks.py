@@ -1,13 +1,14 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
 
-from app.api.routers.auth import ACCESS_COOKIE
+from app.api.auth_cookies import ACCESS_COOKIE
 from app.core.managers.auth import AuthenticationError
 from app.core.managers.projects import BusinessRequiredError, ProjectNotFoundError
 from app.core.managers.tasks import AssigneeNotFoundError, TaskNotFoundError
-from app.deps import SessionDep, TaskManagerDep
-from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.deps import SessionDep, TaskManagerDep, WebPrincipalDep
+from app.models import TaskPriority, TaskStatus
+from app.schemas.task import TaskCreate, TaskPage, TaskRead, TaskUpdate
 
 router = APIRouter()
 ProjectId = Annotated[int, Path(gt=0)]
@@ -34,20 +35,44 @@ def _raise_http_error(error: ValueError) -> None:
     raise error
 
 
-@router.get("", response_model=list[TaskRead])
+@router.get("", response_model=TaskPage)
 async def list_tasks(
     project_id: ProjectId,
-    request: Request,
     session: SessionDep,
+    principal: WebPrincipalDep,
     manager: TaskManagerDep,
-) -> list[TaskRead]:
+    task_status: Annotated[TaskStatus | None, Query(alias="status")] = None,
+    priority: TaskPriority | None = None,
+    assignee_id: Annotated[int | None, Query(gt=0)] = None,
+    query: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    sort_by: Literal["id", "title", "status", "priority"] = "id",
+    sort_order: Literal["asc", "desc"] = "desc",
+) -> TaskPage:
     try:
-        tasks = await manager.list_tasks(
-            session, request.cookies.get(ACCESS_COOKIE), project_id
+        tasks, total = await manager.list_tasks_page_for_principal(
+            session,
+            principal,
+            project_id,
+            status=task_status,
+            priority=priority,
+            assignee_id=assignee_id,
+            query=query.strip() if query and query.strip() else None,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            descending=sort_order == "desc",
         )
-    except (AuthenticationError, BusinessRequiredError, ProjectNotFoundError) as error:
+    except (BusinessRequiredError, ProjectNotFoundError, AssigneeNotFoundError) as error:
         _raise_http_error(error)
-    return [TaskRead.model_validate(task) for task in tasks]
+    return TaskPage(
+        tasks=[TaskRead.model_validate(task) for task in tasks],
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(tasks) < total,
+    )
 
 
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)

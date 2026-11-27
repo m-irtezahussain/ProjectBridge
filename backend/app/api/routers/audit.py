@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from app.api.routers.auth import ACCESS_COOKIE
+from app.api.auth_cookies import ACCESS_COOKIE
 from app.core.managers.auth import AuthenticationError
 from app.core.managers.projects import BusinessRequiredError
 from app.deps import AuditManagerDep, SessionDep

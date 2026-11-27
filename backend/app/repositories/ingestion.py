@@ -58,6 +58,19 @@ class IngestionRepository:
             .limit(1)
         )
 
+    async def get_latest_for_document(
+        self, session: AsyncSession, business_id: int, document_id: int
+    ) -> IngestionRun | None:
+        return await session.scalar(
+            select(IngestionRun)
+            .where(
+                IngestionRun.business_id == business_id,
+                IngestionRun.document_id == document_id,
+            )
+            .order_by(IngestionRun.id.desc())
+            .limit(1)
+        )
+
     async def claim(
         self, session: AsyncSession, worker_id: str, lease_seconds: int
     ) -> IngestionRun | None:

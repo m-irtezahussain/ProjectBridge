@@ -35,7 +35,7 @@ export function DashboardFrame({ children, userName, userEmail }: DashboardFrame
           <small>Workspace</small>
           {dashboardNav.map((item) => (
             <Link
-              className={item.href === pathname ? "active" : ""}
+              className={item.href === pathname || pathname.startsWith(`${item.href}/`) ? "active" : ""}
               href={item.href}
               key={item.label}
               onClick={() => setSidebarOpen(false)}

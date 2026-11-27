@@ -1,8 +1,9 @@
 "use client";
 
 import type { CSSProperties, DragEvent, FormEvent, KeyboardEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { flushSync } from "react-dom";
 
 import { Icon } from "@/components/ui/icon";
@@ -23,9 +24,10 @@ import { getProject } from "@/services/projects-api";
 import {
   createTask as createTaskRequest,
   deleteTask as deleteTaskRequest,
-  listTasks,
+  listTasksPage,
   updateTask as updateTaskRequest,
   type TaskPayload,
+  type TaskListOptions,
 } from "@/services/tasks-api";
 
 const views: readonly Readonly<{ id: TaskView; label: string; icon: "kanban" | "list" | "calendar" }>[] = [
@@ -34,6 +36,8 @@ const views: readonly Readonly<{ id: TaskView; label: string; icon: "kanban" | "
   { id: "calendar", label: "Calendar", icon: "calendar" },
 ];
 const priorities: readonly TaskPriority[] = ["low", "medium", "high", "urgent"];
+const taskPriorities = new Set<TaskPriority>(priorities);
+const TASK_PAGE_SIZE = 50;
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 const TASK_STATUS_DESCRIPTIONS: Record<TaskStatus, string> = {
@@ -53,6 +57,11 @@ const TASK_PRIORITY_DESCRIPTIONS: Record<TaskPriority, string> = {
 type ViewTransitionDocument = Document & {
   startViewTransition?: (update: () => void) => unknown;
 };
+
+function positiveOffset(value: string | null): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
 
 function TaskStatusDropdown({
   status,
@@ -678,15 +687,30 @@ function TaskCard({
 }
 
 export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedView = searchParams.get("view");
+  const view: TaskView = requestedView === "list" || requestedView === "calendar" ? requestedView : "kanban";
+  const query = searchParams.get("q") ?? "";
+  const requestedPriority = searchParams.get("priority");
+  const priority: TaskPriority | "All" = requestedPriority && taskPriorities.has(requestedPriority as TaskPriority)
+    ? requestedPriority as TaskPriority
+    : "All";
+  const requestedSort = searchParams.get("sort");
+  const sortBy = requestedSort === "title" || requestedSort === "status" || requestedSort === "priority"
+    ? requestedSort
+    : "id";
+  const sortOrder = searchParams.get("order") === "asc" ? "asc" : "desc";
+  const offset = positiveOffset(searchParams.get("offset"));
   const [project, setProject] = useState<ProjectItem | null>(null);
   const [projectError, setProjectError] = useState("");
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
+  const [tasksTotal, setTasksTotal] = useState(0);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState("");
   const [reloadVersion, setReloadVersion] = useState(0);
-  const [view, setView] = useState<TaskView>("kanban");
-  const [query, setQuery] = useState("");
-  const [priority, setPriority] = useState<TaskPriority | "All">("All");
+  const [queryInput, setQueryInput] = useState(query);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
   const [calendarDate, setCalendarDate] = useState(() => {
@@ -704,35 +728,68 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
   const mutationQueues = useRef(new Map<number, Promise<void>>());
   const noticeTimer = useRef<number | undefined>(undefined);
 
+  const replaceParams = useCallback((changes: Readonly<Record<string, string | null>>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(changes)) {
+      if (value === null || value === "") params.delete(key);
+      else params.set(key, value);
+    }
+    const next = params.toString();
+    router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
+
   useEffect(() => {
     let active = true;
     async function loadWorkspace() {
+      setTasksLoading(true);
+      setTasksError("");
+      const options: TaskListOptions = {
+        limit: TASK_PAGE_SIZE,
+        offset,
+        priority: priority === "All" ? undefined : priority,
+        query: query || undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      };
       const [projectResult, tasksResult] = await Promise.allSettled([
         getProject(projectId),
-        listTasks(projectId),
+        listTasksPage(projectId, options),
       ]);
       if (!active) return;
       if (projectResult.status === "fulfilled") setProject(projectResult.value);
       else setProjectError(projectResult.reason instanceof Error ? projectResult.reason.message : "Project could not be loaded.");
-      if (tasksResult.status === "fulfilled") setTasks(tasksResult.value);
+      if (tasksResult.status === "fulfilled") {
+        setTasks([...tasksResult.value.items]);
+        setTasksTotal(tasksResult.value.total);
+        if (offset > 0 && tasksResult.value.items.length === 0 && tasksResult.value.total > 0) {
+          const lastOffset = Math.floor((tasksResult.value.total - 1) / TASK_PAGE_SIZE) * TASK_PAGE_SIZE;
+          replaceParams({ offset: String(lastOffset) });
+        }
+      }
       else setTasksError(tasksResult.reason instanceof Error ? tasksResult.reason.message : "Tasks could not be loaded.");
       setTasksLoading(false);
     }
     void loadWorkspace();
     return () => { active = false; };
-  }, [projectId, reloadVersion]);
+  }, [offset, priority, projectId, query, reloadVersion, replaceParams, sortBy, sortOrder]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQueryInput(query), 0);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const normalized = queryInput.trim();
+      if (normalized !== query) replaceParams({ q: normalized || null, offset: null });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query, queryInput, replaceParams]);
 
   useEffect(() => () => {
     if (noticeTimer.current !== undefined) window.clearTimeout(noticeTimer.current);
   }, []);
 
-  const visibleTasks = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return tasks.filter((task) => (
-      (priority === "All" || task.priority === priority) &&
-      (!normalized || task.title.toLowerCase().includes(normalized) || task.description?.toLowerCase().includes(normalized))
-    ));
-  }, [priority, query, tasks]);
+  const visibleTasks = tasks;
 
   function announce(message: string) {
     setNotice(message);
@@ -833,6 +890,7 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
       transitionUpdate(() => setTasks((current) => editingTask
         ? current.map((task) => task.id === saved.id ? saved : task)
         : [saved, ...current]));
+      setReloadVersion((value) => value + 1);
       setTaskDialogOpen(false);
       setEditingTask(null);
       announce(editingTask ? `${title} was updated.` : `${title} was added.`);
@@ -851,6 +909,8 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
     transitionUpdate(() => setTasks((current) => current.filter((item) => item.id !== task.id)));
     try {
       await deleteTaskRequest(projectId, task.id);
+      setTasksTotal((current) => Math.max(0, current - 1));
+      setReloadVersion((value) => value + 1);
       announce(`${task.title} was deleted.`);
     } catch (error) {
       transitionUpdate(() => setTasks((current) => {
@@ -885,7 +945,7 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
         </button>
       </header>
       <section className="workspace-insights" aria-label="Task summary">
-        <article><span>All tasks</span><strong>{tasks.length.toString().padStart(2, "0")}</strong></article>
+        <article><span>Matching tasks</span><strong>{tasksTotal.toString().padStart(2, "0")}</strong></article>
         <article><span>In process</span><strong>{tasksForStatus(tasks, "in process").length.toString().padStart(2, "0")}</strong></article>
         <article><span>In review</span><strong>{tasksForStatus(tasks, "in review").length.toString().padStart(2, "0")}</strong></article>
         <article><span>Completed</span><strong>{tasksForStatus(tasks, "done").length.toString().padStart(2, "0")}</strong></article>
@@ -897,7 +957,7 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
               className={view === item.id ? "active" : ""}
               type="button"
               aria-pressed={view === item.id}
-              onClick={() => setView(item.id)}
+              onClick={() => replaceParams({ view: item.id === "kanban" ? null : item.id })}
               key={item.id}
             >
               <Icon name={item.icon} />
@@ -907,12 +967,13 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
         </div>
         <label className="workspace-search">
           <Icon name="search" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks…" aria-label="Search tasks" />
+          <input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search tasks…" aria-label="Search tasks" />
         </label>
         <TaskPriorityFilter
           priority={priority}
-          onPriorityChange={setPriority}
+          onPriorityChange={(value) => replaceParams({ priority: value === "All" ? null : value, offset: null })}
         />
+        <label className="discovery-sort discovery-sort--tasks"><span>Sort</span><select aria-label="Sort tasks" value={`${sortBy}:${sortOrder}`} onChange={(event) => { const [sort, order] = event.target.value.split(":"); replaceParams({ sort, order, offset: null }); }}><option value="id:desc">Newest first</option><option value="id:asc">Oldest first</option><option value="title:asc">Title A–Z</option><option value="title:desc">Title Z–A</option><option value="priority:desc">Priority</option><option value="status:asc">Status</option></select></label>
       </section>
 
       {tasksError && (
@@ -1053,12 +1114,20 @@ export function ProjectWorkspace({ projectId }: Readonly<{ projectId: number }>)
         )}
       </section>
 
+      {!tasksLoading && tasks.length > 0 && (
+        <nav className="discovery-pagination" aria-label="Task pages">
+          <button type="button" disabled={offset === 0} onClick={() => replaceParams({ offset: String(Math.max(0, offset - TASK_PAGE_SIZE)) })}>Previous</button>
+          <span>Page {Math.floor(offset / TASK_PAGE_SIZE) + 1} of {Math.max(1, Math.ceil(tasksTotal / TASK_PAGE_SIZE))} · {offset + 1}–{Math.min(offset + tasks.length, tasksTotal)} of {tasksTotal}</span>
+          <button type="button" disabled={offset + tasks.length >= tasksTotal} onClick={() => replaceParams({ offset: String(offset + TASK_PAGE_SIZE) })}>Next</button>
+        </nav>
+      )}
+
       {!tasksLoading && visibleTasks.length === 0 && (
         <section className="workspace-no-tasks">
           <Icon name="search" />
-          <h2>{tasks.length === 0 ? "No tasks yet" : "No matching tasks"}</h2>
-          <p>{tasks.length === 0 ? "Create the first task for this project." : "Clear the search or choose another priority."}</p>
-          <button type="button" onClick={tasks.length === 0 ? openCreateTask : () => { setQuery(""); setPriority("All"); }}>{tasks.length === 0 ? "Create task" : "Reset filters"}</button>
+          <h2>{tasksTotal === 0 && !query && priority === "All" ? "No tasks yet" : "No matching tasks"}</h2>
+          <p>{tasksTotal === 0 && !query && priority === "All" ? "Create the first task for this project." : "Clear the search or choose another priority."}</p>
+          <button type="button" onClick={tasksTotal === 0 && !query && priority === "All" ? openCreateTask : () => { setQueryInput(""); replaceParams({ q: null, priority: null, offset: null }); }}>{tasksTotal === 0 && !query && priority === "All" ? "Create task" : "Reset filters"}</button>
         </section>
       )}
 

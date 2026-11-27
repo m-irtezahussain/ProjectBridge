@@ -1,5 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
+from app.api.auth_cookies import (
+    ACCESS_COOKIE,
+    ONBOARDING_COOKIE,
+    REFRESH_COOKIE,
+    REFRESH_COOKIE_PATH,
+)
 from app.config import get_settings
 from app.core.managers.auth import AuthenticationError
 from app.core.services.rate_limits import RateLimitExceededError
@@ -8,10 +14,6 @@ from app.schemas.auth import LoginRequest, NavigationResponse, SessionResponse
 from app.schemas.user import UserCreate
 
 router = APIRouter()
-ACCESS_COOKIE = "projectbridge_access"
-ONBOARDING_COOKIE = "projectbridge_onboarding"
-REFRESH_COOKIE = "projectbridge_refresh"
-REFRESH_COOKIE_PATH = "/api/v1/auth"
 
 
 def _set_cookie(response: Response, name: str, token: str) -> None:

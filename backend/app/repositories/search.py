@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql.elements import ColumnElement
@@ -108,6 +108,61 @@ class SearchRepository:
         job.worker_id = worker_id
         job.attempts += 1
         return job
+
+    async def get_job(
+        self, session: AsyncSession, business_id: int, job_id: int
+    ) -> SearchIndexJob | None:
+        return await session.scalar(
+            select(SearchIndexJob).where(
+                SearchIndexJob.id == job_id,
+                SearchIndexJob.business_id == business_id,
+            )
+        )
+
+    async def get_latest_project_job(
+        self, session: AsyncSession, business_id: int, project_id: int
+    ) -> SearchIndexJob | None:
+        return await session.scalar(
+            select(SearchIndexJob)
+            .where(
+                SearchIndexJob.business_id == business_id,
+                SearchIndexJob.project_id == project_id,
+            )
+            .order_by(SearchIndexJob.id.desc())
+            .limit(1)
+        )
+
+    async def count_pending_project_jobs(
+        self, session: AsyncSession, business_id: int, project_id: int
+    ) -> int:
+        count = await session.scalar(
+            select(func.count(SearchIndexJob.id)).where(
+                SearchIndexJob.business_id == business_id,
+                SearchIndexJob.project_id == project_id,
+                SearchIndexJob.status.in_(
+                    {
+                        SearchJobStatus.QUEUED,
+                        SearchJobStatus.PROCESSING,
+                        SearchJobStatus.RETRY_SCHEDULED,
+                    }
+                ),
+            )
+        )
+        return int(count or 0)
+
+    async def get_latest_completed_project_job(
+        self, session: AsyncSession, business_id: int, project_id: int
+    ) -> SearchIndexJob | None:
+        return await session.scalar(
+            select(SearchIndexJob)
+            .where(
+                SearchIndexJob.business_id == business_id,
+                SearchIndexJob.project_id == project_id,
+                SearchIndexJob.status == SearchJobStatus.COMPLETED,
+            )
+            .order_by(SearchIndexJob.completed_at.desc(), SearchIndexJob.id.desc())
+            .limit(1)
+        )
 
     async def get_document_chunks(
         self, session: AsyncSession, business_id: int, document_id: int

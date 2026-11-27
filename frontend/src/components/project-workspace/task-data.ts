@@ -1,6 +1,6 @@
 export type TaskStatus = "todo" | "in process" | "in review" | "done";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
-export type TaskSource = "api" | "mcp";
+export type TaskSource = "api" | "rest" | "mcp" | "worker";
 export type TaskView = "kanban" | "list" | "calendar";
 
 export type ProjectTask = Readonly<{

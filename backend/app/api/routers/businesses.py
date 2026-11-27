@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
-from app.api.routers.auth import (
+from app.api.auth_cookies import (
     ACCESS_COOKIE,
     ONBOARDING_COOKIE,
-    _clear_cookies,
 )
+from app.api.routers.auth import _clear_cookies
 from app.core.managers.auth import (
     AuthenticationError,
     BusinessAlreadyRegisteredError,

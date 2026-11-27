@@ -23,7 +23,7 @@ afterEach(() => {
 describe("projects API service", () => {
   it("uses all project CRUD endpoints with cookies", async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(Response.json([project]))
+      .mockResolvedValueOnce(Response.json({ projects: [project], total: 1, limit: 100, offset: 0, has_more: false }))
       .mockResolvedValueOnce(Response.json(project))
       .mockResolvedValueOnce(Response.json(project, { status: 201 }))
       .mockResolvedValueOnce(Response.json({ ...project, status: "Completed" }))
@@ -37,7 +37,7 @@ describe("projects API service", () => {
     await expect(deleteProject(8)).resolves.toBeUndefined();
 
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      "http://localhost:8000/api/v1/projects",
+      "http://localhost:8000/api/v1/projects?limit=100",
       "http://localhost:8000/api/v1/projects/8",
       "http://localhost:8000/api/v1/projects",
       "http://localhost:8000/api/v1/projects/8",

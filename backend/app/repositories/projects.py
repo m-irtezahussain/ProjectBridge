@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Project, ProjectStatus
@@ -109,7 +109,14 @@ class ProjectRepository:
         if status is not None:
             filters.append(Project.status == status)
         if query is not None:
-            filters.append(Project.name.ilike(f"%{query}%"))
+            escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped_query}%"
+            filters.append(
+                or_(
+                    Project.name.ilike(pattern, escape="\\"),
+                    Project.description.ilike(pattern, escape="\\"),
+                )
+            )
 
         sort_columns = {
             "id": Project.id,
@@ -118,13 +125,14 @@ class ProjectRepository:
         }
         sort_column = sort_columns[sort_by]
         ordering = sort_column.desc() if descending else sort_column.asc()
+        id_ordering = Project.id.desc() if descending else Project.id.asc()
         total = await session.scalar(
             select(func.count()).select_from(Project).where(*filters)
         )
         result = await session.scalars(
             select(Project)
             .where(*filters)
-            .order_by(ordering, Project.id.asc())
+            .order_by(ordering, id_ordering)
             .limit(limit)
             .offset(offset)
         )
